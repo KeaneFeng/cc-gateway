@@ -1,5 +1,6 @@
 mod config;
 mod error;
+mod interactive;
 mod provider;
 mod proxy;
 
@@ -13,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 /// CC-Switch-Pro: Lightweight multi-provider aggregation proxy for Claude Code
 #[derive(Parser)]
 #[command(name = "cc-switch-pro")]
-#[command(version = "0.1.0")]
+#[command(version = "0.2.0")]
 #[command(about = "Lightweight multi-provider aggregation proxy for Claude Code", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -187,6 +188,13 @@ enum Commands {
         #[arg(long)]
         db: Option<String>,
     },
+
+    /// Interactive mode (TUI with arrow keys, TAB, etc.)
+    Interactive {
+        /// Config file path
+        #[arg(short, long, default_value = "~/.cc-switch-pro/config.toml")]
+        config: String,
+    },
 }
 
 #[tokio::main]
@@ -242,6 +250,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Import { config, db } => {
             import(config, db)?;
+        }
+        Commands::Interactive { config } => {
+            interactive::run_interactive(&expand_path(&config))?;
         }
     }
 

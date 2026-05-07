@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch-pro"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Lightweight multi-provider aggregation proxy for Claude Code"
 license = "MIT"
@@ -51,6 +51,11 @@ dirs = "5"
 
 # SQLite (for importing from cc-switch)
 rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Interactive TUI
+dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+console = "0.15"
+indicatif = "0.17"
 
 [profile.release]
 opt-level = 3
