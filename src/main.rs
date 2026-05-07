@@ -1,4 +1,6 @@
+mod commands;
 mod config;
+mod database;
 mod error;
 mod interactive;
 mod provider;
@@ -195,6 +197,58 @@ enum Commands {
         #[arg(short, long, default_value = "~/.cc-switch-pro/config.toml")]
         config: String,
     },
+
+    /// Test connection to providers
+    Test {
+        /// Config file path
+        #[arg(short, long, default_value = "~/.cc-switch-pro/config.toml")]
+        config: String,
+
+        /// Test specific provider
+        #[arg(short, long)]
+        id: Option<String>,
+
+        /// Save results to database
+        #[arg(long)]
+        save: bool,
+    },
+
+    /// Show usage statistics
+    Usage {
+        /// Number of days to show
+        #[arg(short, long, default_value = "30")]
+        days: i32,
+
+        /// Show usage for specific provider
+        #[arg(short, long)]
+        provider: Option<String>,
+    },
+
+    /// Show provider health status
+    Health {
+        /// Config file path
+        #[arg(short, long, default_value = "~/.cc-switch-pro/config.toml")]
+        config: String,
+    },
+
+    /// Configure proxy settings
+    ProxyConfig {
+        /// Enable/disable proxy
+        #[arg(long)]
+        enable: Option<bool>,
+
+        /// Set listen port
+        #[arg(long)]
+        port: Option<i32>,
+
+        /// Enable/disable auto failover
+        #[arg(long)]
+        failover: Option<bool>,
+
+        /// Show current config
+        #[arg(long)]
+        show: bool,
+    },
 }
 
 #[tokio::main]
@@ -253,6 +307,18 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Interactive { config } => {
             interactive::run_interactive(&expand_path(&config))?;
+        }
+        Commands::Test { config, id, save } => {
+            test_providers(config, id, save).await?;
+        }
+        Commands::Usage { days, provider } => {
+            show_usage(days, provider)?;
+        }
+        Commands::Health { config } => {
+            show_health(config)?;
+        }
+        Commands::ProxyConfig { enable, port, failover, show } => {
+            configure_proxy(enable, port, failover, show)?;
         }
     }
 
@@ -314,9 +380,17 @@ fn init(output: String) -> anyhow::Result<()> {
     let output = expand_path(&output);
     let config = config::generate_example_config();
     config.save(&output)?;
-    println!("Example config saved to: {}", output.display());
-    println!("\nEdit the config file to add your API keys, then run:");
-    println!("  cc-switch-pro serve");
+    
+    // Also initialize database
+    let _db = database::Database::open_cc_switch_compatible()?;
+    
+    println!("✓ Config saved to: {}", output.display());
+    println!("✓ Database initialized at: ~/.cc-switch-pro/cc-switch-pro.db");
+    println!("\nNext steps:");
+    println!("  1. Edit config file to add your API keys");
+    println!("  2. Or import from cc-switch: cc-switch-pro import");
+    println!("  3. Or add from presets: cc-switch-pro add --preset deepseek --key YOUR_KEY");
+    println!("  4. Start proxy: cc-switch-pro serve");
     Ok(())
 }
 
@@ -328,14 +402,11 @@ fn list(config_path: String, table: bool) -> anyhow::Result<()> {
         println!("No providers configured.");
         println!("\nAdd a provider:");
         println!("  cc-switch-pro add --preset mimo --key YOUR_API_KEY");
-        println!("  cc-switch-pro add --id myprovider --name \"My Provider\" --url https://api.example.com/v1 --key YOUR_KEY --model model-name");
-        println!("\nImport from cc-switch:");
         println!("  cc-switch-pro import");
         return Ok(());
     }
 
     if table {
-        // Table format
         println!("{:<15} {:<25} {:<15} {:<40} {:<8}", "ID", "Name", "Model ID", "URL", "Default");
         println!("{}", "-".repeat(103));
         for p in &config.providers {
@@ -350,7 +421,6 @@ fn list(config_path: String, table: bool) -> anyhow::Result<()> {
             );
         }
     } else {
-        // Detailed format
         println!("Configured providers:");
         println!("{:-<60}", "");
         for p in &config.providers {
@@ -395,7 +465,6 @@ fn add(
     };
 
     let provider = if let Some(preset_id) = preset {
-        // Add from preset
         let preset = config::presets::get_preset_by_id(&preset_id)
             .ok_or_else(|| anyhow::anyhow!("Preset '{}' not found", preset_id))?;
 
@@ -414,7 +483,6 @@ fn add(
             preset_id: Some(preset.id.to_string()),
         }
     } else {
-        // Add custom provider
         let id = id.ok_or_else(|| anyhow::anyhow!("Provider ID is required (--id)"))?;
         let name = name.ok_or_else(|| anyhow::anyhow!("Provider name is required (--name)"))?;
         let url = url.ok_or_else(|| anyhow::anyhow!("Base URL is required (--url)"))?;
@@ -434,8 +502,31 @@ fn add(
         }
     };
 
+    // Save to config file
     config.add_provider(provider.clone())?;
     config.save(&config_path)?;
+
+    // Also save to database
+    let db = database::Database::open_cc_switch_compatible()?;
+    let settings_config = serde_json::json!({
+        "env": {
+            "ANTHROPIC_BASE_URL": provider.base_url,
+            "ANTHROPIC_AUTH_TOKEN": provider.api_key,
+            "ANTHROPIC_MODEL": provider.model,
+        }
+    });
+    let db_provider = database::ProviderRow {
+        id: provider.id.clone(),
+        name: provider.name.clone(),
+        settings_config: settings_config.to_string(),
+        website_url: None,
+        category: provider.preset_id.clone(),
+        is_current: provider.is_default,
+        in_failover_queue: false,
+        cost_multiplier: "1.0".to_string(),
+        provider_type: None,
+    };
+    db.save_provider(&db_provider)?;
 
     println!("✓ Provider '{}' added successfully", provider.id);
     if let Some(ref preset_id) = provider.preset_id {
@@ -493,6 +584,10 @@ fn remove(config_path: String, id: String) -> anyhow::Result<()> {
     config.remove_provider(&id)?;
     config.save(&config_path)?;
 
+    // Also remove from database
+    let db = database::Database::open_cc_switch_compatible()?;
+    db.delete_provider(&id, "claude")?;
+
     println!("✓ Provider '{}' removed", id);
     Ok(())
 }
@@ -503,6 +598,10 @@ fn set_default(config_path: String, id: String) -> anyhow::Result<()> {
 
     config.set_default_provider(&id)?;
     config.save(&config_path)?;
+
+    // Also update database
+    let db = database::Database::open_cc_switch_compatible()?;
+    db.set_current_provider(&id, "claude")?;
 
     println!("✓ Default provider set to '{}'", id);
     Ok(())
@@ -551,44 +650,57 @@ fn presets(category: Option<String>, detail: bool) -> anyhow::Result<()> {
     println!("Total: {} presets", presets.len());
     println!("\nUsage:");
     println!("  cc-switch-pro add --preset <PRESET_ID> --key YOUR_API_KEY");
-    println!("  cc-switch-pro add --preset mimo --key sk-xxx");
 
     Ok(())
 }
 
 fn import(config_path: String, db: Option<String>) -> anyhow::Result<()> {
     let config_path = expand_path(&config_path);
+    let target_db = database::Database::open_cc_switch_compatible()?;
 
-    // Try to import from cc-switch
-    let imported_config = if let Some(db_path) = db {
-        // Use custom db path
-        let db_path = expand_path(&db_path);
-        if !db_path.exists() {
-            anyhow::bail!("Database file not found: {}", db_path.display());
-        }
-        // TODO: implement custom db import
-        anyhow::bail!("Custom database import not yet implemented");
+    let cc_switch_db = if let Some(db_path) = db {
+        expand_path(&db_path)
     } else {
-        config::import_from_cc_switch()?
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".cc-switch")
+            .join("cc-switch.db")
     };
 
-    // Load existing config or create new
+    if !cc_switch_db.exists() {
+        anyhow::bail!("cc-switch database not found at: {}", cc_switch_db.display());
+    }
+
+    let imported = target_db.import_from_cc_switch(&cc_switch_db)?;
+
+    // Also update config file
     let mut config = if config_path.exists() {
         config::AppConfig::load(&config_path)?
     } else {
         config::AppConfig::default()
     };
 
-    // Merge providers (skip duplicates)
-    let mut imported_count = 0;
-    for provider in imported_config.providers {
-        if !config.providers.iter().any(|p| p.id == provider.id) {
-            config.providers.push(provider);
-            imported_count += 1;
+    let providers = target_db.get_providers("claude")?;
+    for p in &providers {
+        if !config.providers.iter().any(|cp| cp.id == p.id) {
+            let settings: serde_json::Value = serde_json::from_str(&p.settings_config).unwrap_or_default();
+            let default_env = serde_json::json!({});
+            let env = settings.get("env").unwrap_or(&default_env);
+            
+            config.providers.push(config::ProviderConfig {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                api_type: "openai".to_string(),
+                base_url: env.get("ANTHROPIC_BASE_URL").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                api_key: env.get("ANTHROPIC_AUTH_TOKEN").or(env.get("ANTHROPIC_API_KEY")).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                model: env.get("ANTHROPIC_MODEL").and_then(|v| v.as_str()).unwrap_or("claude-sonnet-4").to_string(),
+                display_name: None,
+                is_default: p.is_current,
+                preset_id: None,
+            });
         }
     }
 
-    // Set first provider as default if no default exists
     if !config.providers.iter().any(|p| p.is_default) {
         if let Some(first) = config.providers.first_mut() {
             first.is_default = true;
@@ -597,14 +709,151 @@ fn import(config_path: String, db: Option<String>) -> anyhow::Result<()> {
 
     config.save(&config_path)?;
 
-    println!("✓ Imported {} providers from cc-switch", imported_count);
-    if imported_count > 0 {
-        println!("\nImported providers:");
-        for p in &config.providers {
-            println!("  - {} ({})", p.id, p.name);
-        }
+    println!("✓ Imported {} providers from cc-switch", imported);
+    println!("✓ Config saved to: {}", config_path.display());
+    println!("✓ Database synced to: ~/.cc-switch-pro/cc-switch-pro.db");
+
+    Ok(())
+}
+
+async fn test_providers(config_path: String, id: Option<String>, save: bool) -> anyhow::Result<()> {
+    let config_path = expand_path(&config_path);
+    let config = config::AppConfig::load(&config_path)?;
+
+    let providers_to_test: Vec<commands::test::TestProvider> = if let Some(ref id) = id {
+        config.providers.iter().filter(|p| p.id == *id).map(|p| commands::test::TestProvider {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            base_url: p.base_url.clone(),
+            api_key: p.api_key.clone(),
+            api_type: p.api_type.clone(),
+        }).collect()
+    } else {
+        config.providers.iter().map(|p| commands::test::TestProvider {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            base_url: p.base_url.clone(),
+            api_key: p.api_key.clone(),
+            api_type: p.api_type.clone(),
+        }).collect()
+    };
+
+    if providers_to_test.is_empty() {
+        println!("No providers to test.");
+        return Ok(());
     }
-    println!("\nConfig saved to: {}", config_path.display());
+
+    println!("\n  Testing connections...");
+    println!("  ────────────────────────────────────────────────────────────────────────");
+
+    let results = commands::test::test_all_providers(&providers_to_test).await;
+
+    for result in &results {
+        let icon = if result.success { "✓" } else { "✗" };
+        let style = if result.success { console::style(icon).green() } else { console::style(icon).red() };
+        println!("  {} {:<20} {}", style, result.provider_id, result.message);
+    }
+
+    println!("  ────────────────────────────────────────────────────────────────────────");
+
+    let success_count = results.iter().filter(|r| r.success).count();
+    println!("  {}/{} providers passed", success_count, results.len());
+
+    if save {
+        let db = database::Database::open_cc_switch_compatible()?;
+        let names: std::collections::HashMap<String, String> = config.providers.iter()
+            .map(|p| (p.id.clone(), p.name.clone()))
+            .collect();
+        commands::test::save_test_results(&db, &results, &names)?;
+        println!("\n  ✓ Results saved to database");
+    }
+
+    Ok(())
+}
+
+fn show_usage(days: i32, provider: Option<String>) -> anyhow::Result<()> {
+    let db = database::Database::open_cc_switch_compatible()?;
+    
+    if let Some(provider_id) = provider {
+        commands::usage::show_provider_usage(&db, &provider_id, days)?;
+    } else {
+        commands::usage::show_usage(&db, days)?;
+    }
+    
+    Ok(())
+}
+
+fn show_health(config_path: String) -> anyhow::Result<()> {
+    let config_path = expand_path(&config_path);
+    let config = config::AppConfig::load(&config_path)?;
+    let db = database::Database::open_cc_switch_compatible()?;
+
+    println!("\n  {} Provider Health Status", console::style("🏥").cyan());
+    println!("  ────────────────────────────────────────────────────────────────────────");
+    println!("  {:<20} {:<10} {:<15} {:<20}", "Provider", "Status", "Last Check", "Error");
+    println!("  ────────────────────────────────────────────────────────────────────────");
+
+    for p in &config.providers {
+        let health = db.get_health(&p.id, "claude")?;
+        
+        let (status, last_check, error) = if let Some(h) = health {
+            let status = if h.is_healthy { console::style("✓ Healthy").green() } else { console::style("✗ Unhealthy").red() };
+            let last_check = h.last_success_at.or(h.last_failure_at).unwrap_or_else(|| "Never".to_string());
+            let error = h.last_error.unwrap_or_default();
+            (status, last_check, error)
+        } else {
+            (console::style("? Unknown").yellow(), "Never".to_string(), String::new())
+        };
+
+        println!("  {:<20} {:<10} {:<15} {:<20}", 
+            truncate(&p.id, 19),
+            status,
+            truncate(&last_check, 14),
+            truncate(&error, 19),
+        );
+    }
+
+    println!("  ────────────────────────────────────────────────────────────────────────");
+    Ok(())
+}
+
+fn configure_proxy(enable: Option<bool>, port: Option<i32>, failover: Option<bool>, show: bool) -> anyhow::Result<()> {
+    let db = database::Database::open_cc_switch_compatible()?;
+    let mut config = db.get_proxy_config("claude")?;
+
+    if show {
+        println!("\n  {} Proxy Configuration", console::style("⚙️").cyan());
+        println!("  ────────────────────────────────────────────────────────────────────────");
+        println!("  {:<25} {}", "Enabled", if config.proxy_enabled { "Yes" } else { "No" });
+        println!("  {:<25} {}:{}", "Listen Address", config.listen_address, config.listen_port);
+        println!("  {:<25} {}", "Auto Failover", if config.auto_failover_enabled { "Yes" } else { "No" });
+        println!("  {:<25} {}", "Max Retries", config.max_retries);
+        println!("  ────────────────────────────────────────────────────────────────────────");
+        return Ok(());
+    }
+
+    if let Some(enable) = enable {
+        config.proxy_enabled = enable;
+    }
+    if let Some(port) = port {
+        config.listen_port = port;
+    }
+    if let Some(failover) = failover {
+        config.auto_failover_enabled = failover;
+    }
+
+    db.update_proxy_config(&config)?;
+
+    println!("✓ Proxy configuration updated");
+    if let Some(enable) = enable {
+        println!("  Enabled: {}", if enable { "Yes" } else { "No" });
+    }
+    if let Some(port) = port {
+        println!("  Port: {}", port);
+    }
+    if let Some(failover) = failover {
+        println!("  Auto Failover: {}", if failover { "Yes" } else { "No" });
+    }
 
     Ok(())
 }

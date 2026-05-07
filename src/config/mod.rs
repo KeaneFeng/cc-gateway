@@ -51,7 +51,7 @@ pub struct AppConfig {
 }
 
 fn default_port() -> u16 {
-    15780
+    16789
 }
 
 fn default_host() -> String {
@@ -264,7 +264,7 @@ pub struct ProviderUpdate {
     pub is_default: Option<bool>,
 }
 
-/// Import from cc-switch database
+/// Import from cc-switch database (legacy, use database module instead)
 pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
     let cc_switch_db = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -350,7 +350,7 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
 /// Generate example config
 pub fn generate_example_config() -> AppConfig {
     AppConfig {
-        port: 15780,
+        port: 16789,
         host: "127.0.0.1".to_string(),
         log_level: "info".to_string(),
         providers: vec![
