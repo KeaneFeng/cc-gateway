@@ -49,6 +49,9 @@ chrono = "0.4"
 # Dirs
 dirs = "5"
 
+# SQLite (for importing from cc-switch)
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 [profile.release]
 opt-level = 3
 lto = true
