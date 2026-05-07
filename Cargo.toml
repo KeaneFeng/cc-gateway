@@ -1,0 +1,54 @@
+[package]
+name = "cc-switch-pro"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight multi-provider aggregation proxy for Claude Code"
+license = "MIT"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1", "http2"] }
+http-body-util = "0.1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Config
+toml = "0.8"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Streaming
+futures = "0.3"
+tokio-stream = "0.1"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# Chrono
+chrono = "0.4"
+
+# Dirs
+dirs = "5"
+
+[profile.release]
+opt-level = 3
+lto = true
