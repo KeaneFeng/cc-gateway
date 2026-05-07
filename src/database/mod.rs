@@ -255,7 +255,7 @@ impl Database {
     pub fn get_providers(&self, app_type: &str) -> anyhow::Result<Vec<ProviderRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, settings_config, website_url, category, is_current, 
-                    in_failover_queue, cost_multiplier, provider_type
+                    in_failover_queue, cost_multiplier, provider_type, notes
              FROM providers WHERE app_type = ?1 ORDER BY sort_index, name"
         )?;
 
@@ -270,6 +270,7 @@ impl Database {
                 in_failover_queue: row.get(6)?,
                 cost_multiplier: row.get(7)?,
                 provider_type: row.get(8)?,
+                notes: row.get(9)?,
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -280,7 +281,7 @@ impl Database {
     pub fn get_provider(&self, id: &str, app_type: &str) -> anyhow::Result<Option<ProviderRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, settings_config, website_url, category, is_current, 
-                    in_failover_queue, cost_multiplier, provider_type
+                    in_failover_queue, cost_multiplier, provider_type, notes
              FROM providers WHERE id = ?1 AND app_type = ?2"
         )?;
 
@@ -295,6 +296,7 @@ impl Database {
                 in_failover_queue: row.get(6)?,
                 cost_multiplier: row.get(7)?,
                 provider_type: row.get(8)?,
+                notes: row.get(9)?,
             })
         })?;
 
@@ -306,8 +308,8 @@ impl Database {
         self.conn.execute(
             "INSERT OR REPLACE INTO providers 
              (id, app_type, name, settings_config, website_url, category, 
-              is_current, in_failover_queue, cost_multiplier, provider_type, created_at)
-             VALUES (?1, 'claude', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, strftime('%s', 'now'))",
+              is_current, in_failover_queue, cost_multiplier, provider_type, notes, created_at)
+             VALUES (?1, 'claude', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, strftime('%s', 'now'))",
             params![
                 provider.id,
                 provider.name,
@@ -318,6 +320,7 @@ impl Database {
                 provider.in_failover_queue,
                 provider.cost_multiplier,
                 provider.provider_type,
+                provider.notes,
             ],
         )?;
         Ok(())
@@ -607,7 +610,7 @@ impl Database {
         
         let mut stmt = src_conn.prepare(
             "SELECT id, name, settings_config, website_url, category, 
-                    in_failover_queue, cost_multiplier, provider_type
+                    in_failover_queue, cost_multiplier, provider_type, notes
              FROM providers WHERE app_type = 'claude'"
         )?;
 
@@ -623,6 +626,7 @@ impl Database {
                 in_failover_queue: row.get(5)?,
                 cost_multiplier: row.get(6)?,
                 provider_type: row.get(7)?,
+                notes: row.get(8)?,
             })
         })?;
 
@@ -651,6 +655,7 @@ pub struct ProviderRow {
     pub in_failover_queue: bool,
     pub cost_multiplier: String,
     pub provider_type: Option<String>,
+    pub notes: Option<String>,
 }
 
 /// Proxy configuration

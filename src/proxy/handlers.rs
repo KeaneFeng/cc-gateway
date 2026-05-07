@@ -55,6 +55,16 @@ impl AppState {
     }
 }
 
+/// Check if provider uses Anthropic format (direct) or OpenAI format (needs conversion)
+fn is_anthropic_format(provider: &Provider) -> bool {
+    let base_url = provider.config.base_url.to_lowercase();
+    // If the URL contains "anthropic" or ends with common Anthropic-compatible paths
+    base_url.contains("anthropic") || 
+    base_url.contains("/api/coding") ||  // Volcengine coding endpoint
+    base_url.contains("/apps/anthropic") ||  // Bailian
+    base_url.contains("/api/anthropic")  // Direct Anthropic API
+}
+
 /// GET /v1/models - List available models
 pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
     let models: Vec<Value> = state
@@ -104,9 +114,8 @@ pub async fn handle_messages(
     // Check if streaming is requested
     let is_stream = body.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
 
-    // Convert Anthropic request to OpenAI format
-    let openai_body = transform::anthropic_to_openai(body.clone())
-        .map_err(|e| ProxyError::TransformError(e))?;
+    // Check if provider uses Anthropic format directly
+    let use_anthropic_format = is_anthropic_format(provider);
 
     // Extract headers to forward
     let headers_vec: Vec<(String, String)> = headers
@@ -116,66 +125,118 @@ pub async fn handle_messages(
         })
         .collect();
 
-    if is_stream {
-        // Handle streaming response
-        let response = provider
-            .forward_streaming_request("chat/completions", openai_body, headers_vec)
-            .await
-            .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
+    if use_anthropic_format {
+        // Forward directly as Anthropic format (no conversion needed)
+        let endpoint = "v1/messages";
+        
+        if is_stream {
+            let response = provider
+                .forward_anthropic_streaming(endpoint, body, headers_vec)
+                .await
+                .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ProxyError::UpstreamError(format!(
-                "Upstream returned {}: {}",
-                status, body
-            )));
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(ProxyError::UpstreamError(format!(
+                    "Upstream returned {}: {}",
+                    status, body
+                )));
+            }
+
+            // Return Anthropic SSE stream directly
+            let byte_stream = response.bytes_stream();
+            let sse_stream = byte_stream.map(|result| {
+                result.map(|bytes| {
+                    let data = String::from_utf8_lossy(&bytes).to_string();
+                    axum::response::sse::Event::default().data(data)
+                })
+            });
+
+            Ok(Sse::new(sse_stream).into_response())
+        } else {
+            let response = provider
+                .forward_anthropic_request(endpoint, body, headers_vec)
+                .await
+                .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(ProxyError::UpstreamError(format!(
+                    "Upstream returned {}: {}",
+                    status, body
+                )));
+            }
+
+            let anthropic_response: Value = response
+                .json()
+                .await
+                .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
+
+            Ok(Json(anthropic_response).into_response())
         }
-
-        // Convert response stream
-        let byte_stream = response.bytes_stream();
-        let string_stream = byte_stream.map(|result| {
-            result
-                .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-        });
-
-        let model = provider.config.model.clone();
-        let message_id = format!("msg_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-        let anthropic_stream = streaming::openai_to_anthropic_stream(string_stream, model, message_id);
-
-        // Return SSE response
-        let sse_stream = anthropic_stream.map(|result| {
-            result.map(|data| axum::response::sse::Event::default().data(data))
-        });
-
-        Ok(Sse::new(sse_stream).into_response())
     } else {
-        // Handle non-streaming response
-        let response = provider
-            .forward_request("chat/completions", openai_body, headers_vec)
-            .await
-            .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
+        // Convert Anthropic request to OpenAI format
+        let openai_body = transform::anthropic_to_openai(body.clone())
+            .map_err(|e| ProxyError::TransformError(e))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ProxyError::UpstreamError(format!(
-                "Upstream returned {}: {}",
-                status, body
-            )));
+        if is_stream {
+            let response = provider
+                .forward_streaming_request("chat/completions", openai_body, headers_vec)
+                .await
+                .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(ProxyError::UpstreamError(format!(
+                    "Upstream returned {}: {}",
+                    status, body
+                )));
+            }
+
+            let byte_stream = response.bytes_stream();
+            let string_stream = byte_stream.map(|result| {
+                result
+                    .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            });
+
+            let model = provider.config.model.clone();
+            let message_id = format!("msg_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+            let anthropic_stream = streaming::openai_to_anthropic_stream(string_stream, model, message_id);
+
+            let sse_stream = anthropic_stream.map(|result| {
+                result.map(|data| axum::response::sse::Event::default().data(data))
+            });
+
+            Ok(Sse::new(sse_stream).into_response())
+        } else {
+            let response = provider
+                .forward_request("chat/completions", openai_body, headers_vec)
+                .await
+                .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(ProxyError::UpstreamError(format!(
+                    "Upstream returned {}: {}",
+                    status, body
+                )));
+            }
+
+            let openai_response: Value = response
+                .json()
+                .await
+                .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
+
+            let anthropic_response =
+                transform::openai_to_anthropic_response(openai_response, &provider.config.model);
+
+            Ok(Json(anthropic_response).into_response())
         }
-
-        let openai_response: Value = response
-            .json()
-            .await
-            .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
-
-        // Convert OpenAI response to Anthropic format
-        let anthropic_response =
-            transform::openai_to_anthropic_response(openai_response, &provider.config.model);
-
-        Ok(Json(anthropic_response).into_response())
     }
 }
 
@@ -200,6 +261,7 @@ pub async fn get_status(State(state): State<AppState>) -> Json<Value> {
                 "model": p.config.model,
                 "base_url": p.config.base_url,
                 "is_default": p.config.is_default,
+                "format": if is_anthropic_format(p) { "anthropic" } else { "openai" },
             })
         })
         .collect();

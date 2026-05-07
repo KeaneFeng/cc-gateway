@@ -31,7 +31,74 @@ impl Provider {
             .unwrap_or_else(|| self.config.name.clone())
     }
 
-    /// Forward a request to this provider
+    /// Forward a request in Anthropic format (no conversion)
+    pub async fn forward_anthropic_request(
+        &self,
+        endpoint: &str,
+        body: Value,
+        headers: Vec<(String, String)>,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let url = format!("{}/{}", self.config.base_url.trim_end_matches('/'), endpoint.trim_start_matches('/'));
+
+        let mut request = self.client.post(&url);
+
+        // Set Anthropic auth header
+        request = request
+            .header("x-api-key", &self.config.api_key)
+            .header("anthropic-version", "2023-06-01");
+
+        // Forward relevant headers
+        for (key, value) in headers {
+            let key_lower = key.to_lowercase();
+            if key_lower != "host"
+                && key_lower != "authorization"
+                && key_lower != "x-api-key"
+                && key_lower != "content-length"
+                && key_lower != "anthropic-version"
+            {
+                request = request.header(&key, &value);
+            }
+        }
+
+        request.json(&body).send().await
+    }
+
+    /// Forward a streaming request in Anthropic format
+    pub async fn forward_anthropic_streaming(
+        &self,
+        endpoint: &str,
+        mut body: Value,
+        headers: Vec<(String, String)>,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let url = format!("{}/{}", self.config.base_url.trim_end_matches('/'), endpoint.trim_start_matches('/'));
+
+        let mut request = self.client.post(&url);
+
+        // Set Anthropic auth header
+        request = request
+            .header("x-api-key", &self.config.api_key)
+            .header("anthropic-version", "2023-06-01");
+
+        // Forward relevant headers
+        for (key, value) in headers {
+            let key_lower = key.to_lowercase();
+            if key_lower != "host"
+                && key_lower != "authorization"
+                && key_lower != "x-api-key"
+                && key_lower != "content-length"
+                && key_lower != "anthropic-version"
+            {
+                request = request.header(&key, &value);
+            }
+        }
+
+        // Force streaming
+        body["stream"] = serde_json::json!(true);
+
+        request.json(&body).send().await
+    }
+
+    /// Forward a request in OpenAI format (with conversion)
     pub async fn forward_request(
         &self,
         endpoint: &str,
@@ -53,10 +120,11 @@ impl Provider {
 
         // Forward relevant headers
         for (key, value) in headers {
-            if key.to_lowercase() != "host"
-                && key.to_lowercase() != "authorization"
-                && key.to_lowercase() != "x-api-key"
-                && key.to_lowercase() != "content-length"
+            let key_lower = key.to_lowercase();
+            if key_lower != "host"
+                && key_lower != "authorization"
+                && key_lower != "x-api-key"
+                && key_lower != "content-length"
             {
                 request = request.header(&key, &value);
             }
@@ -65,11 +133,11 @@ impl Provider {
         request.json(&body).send().await
     }
 
-    /// Forward a streaming request to this provider
+    /// Forward a streaming request in OpenAI format
     pub async fn forward_streaming_request(
         &self,
         endpoint: &str,
-        body: Value,
+        mut body: Value,
         headers: Vec<(String, String)>,
     ) -> Result<reqwest::Response, reqwest::Error> {
         let url = format!("{}/{}", self.config.base_url.trim_end_matches('/'), endpoint.trim_start_matches('/'));
@@ -87,17 +155,17 @@ impl Provider {
 
         // Forward relevant headers
         for (key, value) in headers {
-            if key.to_lowercase() != "host"
-                && key.to_lowercase() != "authorization"
-                && key.to_lowercase() != "x-api-key"
-                && key.to_lowercase() != "content-length"
+            let key_lower = key.to_lowercase();
+            if key_lower != "host"
+                && key_lower != "authorization"
+                && key_lower != "x-api-key"
+                && key_lower != "content-length"
             {
                 request = request.header(&key, &value);
             }
         }
 
         // Force streaming
-        let mut body = body;
         body["stream"] = serde_json::json!(true);
 
         request.json(&body).send().await

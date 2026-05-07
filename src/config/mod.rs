@@ -28,6 +28,9 @@ pub struct ProviderConfig {
     /// Preset ID (if created from a preset)
     #[serde(default)]
     pub preset_id: Option<String>,
+    /// Notes (e.g., actual model name, description)
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 fn default_api_type() -> String {
@@ -170,7 +173,6 @@ impl AppConfig {
 
     /// Update a provider
     pub fn update_provider(&mut self, id: &str, updates: ProviderUpdate) -> anyhow::Result<()> {
-        // First, find the provider and check if we need to unset other defaults
         let needs_unset_defaults = updates.is_default == Some(true);
         
         if needs_unset_defaults {
@@ -179,7 +181,6 @@ impl AppConfig {
             }
         }
 
-        // Now update the provider
         let provider = self.providers.iter_mut().find(|p| p.id == id)
             .ok_or_else(|| anyhow::anyhow!("Provider with ID '{}' not found", id))?;
 
@@ -200,6 +201,9 @@ impl AppConfig {
         }
         if let Some(is_default) = updates.is_default {
             provider.is_default = is_default;
+        }
+        if let Some(notes) = updates.notes {
+            provider.notes = Some(notes);
         }
 
         // If no default exists, set the first one
@@ -262,6 +266,7 @@ pub struct ProviderUpdate {
     pub model: Option<String>,
     pub display_name: Option<String>,
     pub is_default: Option<bool>,
+    pub notes: Option<String>,
 }
 
 /// Import from cc-switch database (legacy, use database module instead)
@@ -280,7 +285,7 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
 
     // Query providers - cc-switch uses app_type = 'claude' for Claude providers
     let mut stmt = conn.prepare(
-        "SELECT id, name, settings_config FROM providers WHERE app_type = 'claude'"
+        "SELECT id, name, settings_config, notes FROM providers WHERE app_type = 'claude'"
     )?;
 
     let providers: Vec<ProviderConfig> = stmt
@@ -288,6 +293,7 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
             let id: String = row.get(0)?;
             let name: String = row.get(1)?;
             let settings_config_str: String = row.get(2)?;
+            let notes: Option<String> = row.get(3)?;
 
             // Parse settings_config JSON
             let settings_config: serde_json::Value = serde_json::from_str(&settings_config_str)
@@ -327,6 +333,7 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
                 display_name: None,
                 is_default: false,
                 preset_id: None,
+                notes,
             }))
         })?
         .filter_map(|r| r.transpose())
@@ -364,6 +371,7 @@ pub fn generate_example_config() -> AppConfig {
                 display_name: Some("Mimo 2.5 Pro".to_string()),
                 is_default: true,
                 preset_id: None,
+                notes: None,
             },
             ProviderConfig {
                 id: "kimi".to_string(),
@@ -375,6 +383,7 @@ pub fn generate_example_config() -> AppConfig {
                 display_name: Some("Kimi 2.5".to_string()),
                 is_default: false,
                 preset_id: None,
+                notes: None,
             },
             ProviderConfig {
                 id: "glm".to_string(),
@@ -386,6 +395,7 @@ pub fn generate_example_config() -> AppConfig {
                 display_name: Some("GLM 5.1".to_string()),
                 is_default: false,
                 preset_id: None,
+                notes: None,
             },
             ProviderConfig {
                 id: "qwen".to_string(),
@@ -397,6 +407,7 @@ pub fn generate_example_config() -> AppConfig {
                 display_name: Some("Qwen 2.5 Plus".to_string()),
                 is_default: false,
                 preset_id: None,
+                notes: None,
             },
         ],
     }
