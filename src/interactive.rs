@@ -2,7 +2,7 @@
 //!
 //! Default mode: shows provider overview with interactive commands
 
-use crate::config::{AppConfig, ProviderConfig, ProviderUpdate, presets};
+use crate::config::{AppConfig, ProviderConfig, ProviderUpdate, ApiFormat, presets};
 use console::{style, Term};
 use dialoguer::{Select, Input, Confirm, theme::ColorfulTheme};
 use std::path::Path;
@@ -172,7 +172,7 @@ pub fn add_provider(config_path: &Path, preset_id: Option<&str>) -> anyhow::Resu
         ProviderConfig {
             id: custom_id,
             name: preset.name.to_string(),
-            api_type: "openai".to_string(),
+            api_format: preset.api_format,
             base_url: preset.base_url.to_string(),
             api_key,
             model: preset.model.to_string(),
@@ -241,7 +241,7 @@ pub fn add_provider(config_path: &Path, preset_id: Option<&str>) -> anyhow::Resu
             ProviderConfig {
                 id: custom_id,
                 name: selected_preset.name.to_string(),
-                api_type: "openai".to_string(),
+                api_format: selected_preset.api_format.clone(),
                 base_url: selected_preset.base_url.to_string(),
                 api_key,
                 model: selected_preset.model.to_string(),
@@ -267,6 +267,22 @@ pub fn add_provider(config_path: &Path, preset_id: Option<&str>) -> anyhow::Resu
             let model: String = Input::with_theme(&theme)
                 .with_prompt("  Model Name")
                 .interact_text()?;
+
+            // API format selection
+            let api_format_options = vec![
+                ("Anthropic Messages (direct passthrough)", ApiFormat::Anthropic),
+                ("OpenAI Chat Completions (needs conversion)", ApiFormat::OpenAiChat),
+                ("OpenAI Responses API (needs conversion)", ApiFormat::OpenAiResponses),
+                ("Gemini Native (needs conversion)", ApiFormat::GeminiNative),
+            ];
+            let api_format_items: Vec<String> = api_format_options.iter().map(|(desc, _)| desc.to_string()).collect();
+            let api_format_selection = Select::with_theme(&theme)
+                .with_prompt("  API Format")
+                .items(&api_format_items)
+                .default(1)
+                .interact()?;
+            let api_format = api_format_options[api_format_selection].1.clone();
+
             let is_default = Confirm::with_theme(&theme)
                 .with_prompt("  Set as default?")
                 .default(false)
@@ -275,7 +291,7 @@ pub fn add_provider(config_path: &Path, preset_id: Option<&str>) -> anyhow::Resu
             ProviderConfig {
                 id,
                 name,
-                api_type: "openai".to_string(),
+                api_format,
                 base_url,
                 api_key,
                 model,

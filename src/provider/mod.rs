@@ -110,7 +110,7 @@ impl Provider {
         let mut request = self.client.post(&url);
 
         // Set auth header based on API type
-        if self.config.api_type == "anthropic" {
+        if self.config.api_format == crate::config::ApiFormat::Anthropic {
             request = request
                 .header("x-api-key", &self.config.api_key)
                 .header("anthropic-version", "2023-06-01");
@@ -145,7 +145,7 @@ impl Provider {
         let mut request = self.client.post(&url);
 
         // Set auth header based on API type
-        if self.config.api_type == "anthropic" {
+        if self.config.api_format == crate::config::ApiFormat::Anthropic {
             request = request
                 .header("x-api-key", &self.config.api_key)
                 .header("anthropic-version", "2023-06-01");

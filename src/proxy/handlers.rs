@@ -62,35 +62,34 @@ impl AppState {
     }
 }
 
-/// Check if provider uses Anthropic format (direct) or OpenAI format (needs conversion)
+/// Check if provider uses Anthropic format based on configured api_format
 fn is_anthropic_format(provider: &Provider) -> bool {
-    let base_url = provider.config.base_url.to_lowercase();
-    // If the URL contains "anthropic" or ends with common Anthropic-compatible paths
-    base_url.contains("anthropic") || 
-    base_url.contains("/api/coding") ||  // Volcengine coding endpoint
-    base_url.contains("/apps/anthropic") ||  // Bailian
-    base_url.contains("/api/anthropic")  // Direct Anthropic API
+    provider.config.api_format == crate::config::ApiFormat::Anthropic
 }
 
-/// GET /v1/models - List available models
+/// GET /v1/models - List available models (Anthropic format for Claude Code gateway discovery)
 pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
     let models: Vec<Value> = state
         .providers
         .iter()
         .map(|p| {
             json!({
+                "type": "model",
                 "id": format!("claude-{}", p.config.id),
-                "object": "model",
-                "created": chrono::Utc::now().timestamp(),
-                "owned_by": "cc-switch-pro",
                 "display_name": p.display_name(),
+                "created_at": chrono::Utc::now().to_rfc3339(),
             })
         })
         .collect();
 
+    let first_id = models.first().and_then(|m| m["id"].as_str()).unwrap_or("").to_string();
+    let last_id = models.last().and_then(|m| m["id"].as_str()).unwrap_or("").to_string();
+
     Json(json!({
-        "object": "list",
-        "data": models
+        "data": models,
+        "has_more": false,
+        "first_id": first_id,
+        "last_id": last_id,
     }))
 }
 
@@ -256,7 +255,7 @@ pub async fn handle_messages(
             let byte_stream = response.bytes_stream();
             let string_stream = byte_stream.map(|result| {
                 result
-                    .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+                    .map(|bytes| String::from_utf8_lossy(bytes.as_ref()).to_string())
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
             });
 

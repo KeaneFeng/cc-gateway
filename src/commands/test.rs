@@ -26,7 +26,7 @@ pub struct TestProvider {
     pub name: String,
     pub base_url: String,
     pub api_key: String,
-    pub api_type: String,
+    pub api_format: String,
 }
 
 /// Run connection tests (called from CLI)
@@ -53,7 +53,7 @@ pub async fn run_test(config_path: &str, id: Option<&str>) -> anyhow::Result<()>
                 name: p.name.clone(),
                 base_url: p.base_url.clone(),
                 api_key: p.api_key.clone(),
-                api_type: p.api_type.clone(),
+                api_format: format!("{:?}", p.api_format),
             })
             .collect()
     } else {
@@ -65,7 +65,7 @@ pub async fn run_test(config_path: &str, id: Option<&str>) -> anyhow::Result<()>
                 name: p.name.clone(),
                 base_url: p.base_url.clone(),
                 api_key: p.api_key.clone(),
-                api_type: p.api_type.clone(),
+                api_format: format!("{:?}", p.api_format),
             })
             .collect()
     };
@@ -122,7 +122,7 @@ pub async fn test_provider(provider: &TestProvider) -> TestResult {
     
     let mut request = client.get(&url);
     
-    if provider.api_type == "anthropic" {
+    if provider.api_format == "Anthropic" {
         request = request
             .header("x-api-key", &provider.api_key)
             .header("anthropic-version", "2023-06-01");

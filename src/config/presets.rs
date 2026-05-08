@@ -3,6 +3,7 @@
 //! Pre-configured provider settings for common AI providers
 
 use serde::{Deserialize, Serialize};
+use crate::config::ApiFormat;
 
 /// Provider preset
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,6 +14,7 @@ pub struct ProviderPreset {
     pub base_url: &'static str,
     pub model: &'static str,
     pub display_name: &'static str,
+    pub api_format: ApiFormat,
     pub website_url: &'static str,
     pub api_key_url: Option<&'static str>,
 }
@@ -28,6 +30,7 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             base_url: "https://api.anthropic.com",
             model: "claude-sonnet-4",
             display_name: "Claude Sonnet 4",
+            api_format: ApiFormat::Anthropic,
             website_url: "https://www.anthropic.com/claude-code",
             api_key_url: None,
         },
@@ -39,6 +42,7 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             base_url: "https://api.deepseek.com/anthropic",
             model: "deepseek-v4-pro",
             display_name: "DeepSeek V4 Pro",
+            api_format: ApiFormat::Anthropic,
             website_url: "https://platform.deepseek.com",
             api_key_url: None,
         },
@@ -49,16 +53,18 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             base_url: "https://open.bigmodel.cn/api/anthropic",
             model: "glm-5",
             display_name: "GLM 5",
-            website_url: "https://open.bigmodel.cn",
+            api_format: ApiFormat::Anthropic,
+            website_url: "https://www.bigmodel.cn/claude-code",
             api_key_url: Some("https://www.bigmodel.cn/claude-code"),
         },
         ProviderPreset {
             id: "kimi",
             name: "Kimi",
             category: "cn_official",
-            base_url: "https://api.moonshot.cn/anthropic",
+            base_url: "https://api.moonshot.cn/v1",
             model: "kimi-k2.6",
             display_name: "Kimi K2.6",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://platform.moonshot.cn",
             api_key_url: None,
         },
@@ -66,19 +72,21 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             id: "kimi-coding",
             name: "Kimi For Coding",
             category: "cn_official",
-            base_url: "https://api.kimi.com/coding/",
-            model: "kimi-k2.6",
+            base_url: "https://api.moonshot.cn/v1",
+            model: "kimi-k2.6-coding",
             display_name: "Kimi K2.6 (Coding)",
-            website_url: "https://www.kimi.com/code/docs/",
+            api_format: ApiFormat::OpenAiChat,
+            website_url: "https://platform.moonshot.cn",
             api_key_url: None,
         },
         ProviderPreset {
             id: "bailian",
             name: "Bailian",
             category: "cn_official",
-            base_url: "https://dashscope.aliyuncs.com/apps/anthropic",
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
             model: "qwen-max",
             display_name: "Qwen Max",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://bailian.console.aliyun.com",
             api_key_url: None,
         },
@@ -86,9 +94,10 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             id: "bailian-coding",
             name: "Bailian For Coding",
             category: "cn_official",
-            base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-            model: "qwen-max",
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model: "qwen-max-coding",
             display_name: "Qwen Max (Coding)",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://bailian.console.aliyun.com",
             api_key_url: None,
         },
@@ -96,9 +105,10 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             id: "stepfun",
             name: "StepFun",
             category: "cn_official",
-            base_url: "https://api.stepfun.com/step_plan",
-            model: "step-3.5-flash-2603",
+            base_url: "https://api.stepfun.com/v1",
+            model: "step-3.5-flash",
             display_name: "Step 3.5 Flash",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://platform.stepfun.com",
             api_key_url: Some("https://platform.stepfun.com/interface-key"),
         },
@@ -106,9 +116,10 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             id: "minimax",
             name: "MiniMax",
             category: "cn_official",
-            base_url: "https://api.minimaxi.com/anthropic",
-            model: "MiniMax-M2.7",
+            base_url: "https://api.minimaxi.com/v1",
+            model: "minimax-m2.7",
             display_name: "MiniMax M2.7",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://platform.minimaxi.com",
             api_key_url: Some("https://platform.minimaxi.com/subscribe/coding-plan"),
         },
@@ -116,50 +127,57 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             id: "doubao",
             name: "DouBao",
             category: "cn_official",
-            base_url: "https://ark.cn-beijing.volces.com/api/coding",
-            model: "doubao-seed-2-0-code-preview-latest",
+            base_url: "https://ark.cn-beijing.volces.com/api/v3",
+            model: "doubao-seed-2.0",
             display_name: "DouBao Seed 2.0",
-            website_url: "https://www.volcengine.com/product/doubao",
+            api_format: ApiFormat::OpenAiChat,
+            website_url: "https://console.volcengine.com/ark",
             api_key_url: None,
         },
         ProviderPreset {
             id: "baidu-qianfan",
             name: "Baidu Qianfan",
             category: "cn_official",
-            base_url: "https://qianfan.baidubce.com/anthropic/coding",
+            base_url: "https://qianfan.baidubce.com/v2",
             model: "qianfan-code-latest",
             display_name: "Qianfan Code",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://cloud.baidu.com/product/qianfan_modelbuilder",
-            api_key_url: Some("https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application"),
+            api_key_url: Some(
+                "https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application",
+            ),
         },
         ProviderPreset {
             id: "longcat",
             name: "LongCat",
             category: "cn_official",
-            base_url: "https://api.longcat.chat/anthropic",
-            model: "LongCat-Flash-Chat",
+            base_url: "https://api.longcat.chat/v1",
+            model: "longcat-flash",
             display_name: "LongCat Flash",
-            website_url: "https://longcat.chat/platform",
+            api_format: ApiFormat::OpenAiChat,
+            website_url: "https://longcat.chat",
             api_key_url: Some("https://longcat.chat/platform/api_keys"),
         },
-        // Aggregators
+        // Aggregator Providers
         ProviderPreset {
             id: "siliconflow",
             name: "SiliconFlow",
             category: "aggregator",
-            base_url: "https://api.siliconflow.cn",
-            model: "Pro/MiniMaxAI/MiniMax-M2.7",
+            base_url: "https://api.siliconflow.cn/v1",
+            model: "minimax-m2.7",
             display_name: "MiniMax M2.7",
-            website_url: "https://siliconflow.cn",
+            api_format: ApiFormat::OpenAiChat,
+            website_url: "https://cloud.siliconflow.cn",
             api_key_url: Some("https://cloud.siliconflow.cn/i/drGuwc9k"),
         },
         ProviderPreset {
             id: "aihubmix",
             name: "AiHubMix",
             category: "aggregator",
-            base_url: "https://aihubmix.com",
+            base_url: "https://aihubmix.com/v1",
             model: "claude-sonnet-4",
             display_name: "Claude Sonnet 4",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://aihubmix.com",
             api_key_url: None,
         },
@@ -167,23 +185,25 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             id: "dmxapi",
             name: "DMXAPI",
             category: "aggregator",
-            base_url: "https://www.dmxapi.cn",
+            base_url: "https://www.dmxapi.com/v1",
             model: "claude-sonnet-4",
             display_name: "Claude Sonnet 4",
-            website_url: "https://www.dmxapi.cn",
+            api_format: ApiFormat::OpenAiChat,
+            website_url: "https://www.dmxapi.com",
             api_key_url: None,
         },
         ProviderPreset {
             id: "modelscope",
             name: "ModelScope",
             category: "aggregator",
-            base_url: "https://api-inference.modelscope.cn",
-            model: "ZhipuAI/GLM-5",
+            base_url: "https://api.modelscope.cn/v1",
+            model: "glm-5",
             display_name: "GLM 5",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://modelscope.cn",
             api_key_url: None,
         },
-        // Third-party
+        // Third Party Providers
         ProviderPreset {
             id: "openrouter",
             name: "OpenRouter",
@@ -191,6 +211,7 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             base_url: "https://openrouter.ai/api/v1",
             model: "anthropic/claude-sonnet-4",
             display_name: "Claude Sonnet 4",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://openrouter.ai",
             api_key_url: None,
         },
@@ -201,6 +222,7 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             base_url: "https://api.together.xyz/v1",
             model: "anthropic/claude-sonnet-4",
             display_name: "Claude Sonnet 4",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://together.ai",
             api_key_url: None,
         },
@@ -209,12 +231,13 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             name: "Fireworks AI",
             category: "third_party",
             base_url: "https://api.fireworks.ai/inference/v1",
-            model: "accounts/fireworks/models/claude-sonnet-4",
+            model: "anthropic/claude-sonnet-4",
             display_name: "Claude Sonnet 4",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://fireworks.ai",
             api_key_url: None,
         },
-        // Custom / Local
+        // Local Providers
         ProviderPreset {
             id: "ollama",
             name: "Ollama (Local)",
@@ -222,6 +245,7 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             base_url: "http://localhost:11434/v1",
             model: "llama3",
             display_name: "Llama 3",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://ollama.ai",
             api_key_url: None,
         },
@@ -232,10 +256,16 @@ pub fn get_all_presets() -> Vec<ProviderPreset> {
             base_url: "http://localhost:1234/v1",
             model: "local-model",
             display_name: "Local Model",
+            api_format: ApiFormat::OpenAiChat,
             website_url: "https://lmstudio.ai",
             api_key_url: None,
         },
     ]
+}
+
+/// Get preset by ID
+pub fn get_preset_by_id(id: &str) -> Option<ProviderPreset> {
+    get_all_presets().into_iter().find(|p| p.id == id)
 }
 
 /// Get presets by category
@@ -246,14 +276,15 @@ pub fn get_presets_by_category(category: &str) -> Vec<ProviderPreset> {
         .collect()
 }
 
-/// Get preset by ID
-pub fn get_preset_by_id(id: &str) -> Option<ProviderPreset> {
-    get_all_presets().into_iter().find(|p| p.id == id)
-}
-
 /// Get all categories
 pub fn get_categories() -> Vec<&'static str> {
-    vec!["official", "cn_official", "aggregator", "third_party", "local"]
+    vec![
+        "official",
+        "cn_official",
+        "aggregator",
+        "third_party",
+        "local",
+    ]
 }
 
 /// Get category display name

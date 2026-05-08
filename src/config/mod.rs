@@ -3,6 +3,29 @@ pub mod presets;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// API format for provider communication
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ApiFormat {
+    /// Anthropic Messages API - direct passthrough
+    #[serde(rename = "anthropic")]
+    Anthropic,
+    /// OpenAI Chat Completions - needs format conversion
+    #[serde(rename = "openai_chat")]
+    OpenAiChat,
+    /// OpenAI Responses API - needs format conversion
+    #[serde(rename = "openai_responses")]
+    OpenAiResponses,
+    /// Gemini Native generateContent - needs format conversion
+    #[serde(rename = "gemini_native")]
+    GeminiNative,
+}
+
+impl Default for ApiFormat {
+    fn default() -> Self {
+        ApiFormat::OpenAiChat
+    }
+}
+
 /// Provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -10,9 +33,9 @@ pub struct ProviderConfig {
     pub id: String,
     /// Display name
     pub name: String,
-    /// API type (openai, anthropic)
-    #[serde(default = "default_api_type")]
-    pub api_type: String,
+    /// API format (anthropic, openai_chat, openai_responses, gemini_native)
+    #[serde(default)]
+    pub api_format: ApiFormat,
     /// Base URL for the provider API
     pub base_url: String,
     /// API key
@@ -31,10 +54,6 @@ pub struct ProviderConfig {
     /// Notes (e.g., actual model name, description)
     #[serde(default)]
     pub notes: Option<String>,
-}
-
-fn default_api_type() -> String {
-    "openai".to_string()
 }
 
 /// Application configuration
@@ -326,7 +345,7 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
             Ok(Some(ProviderConfig {
                 id: id.clone(),
                 name,
-                api_type: "openai".to_string(),
+                api_format: ApiFormat::OpenAiChat,
                 base_url,
                 api_key,
                 model,
@@ -364,7 +383,7 @@ pub fn generate_example_config() -> AppConfig {
             ProviderConfig {
                 id: "mimo".to_string(),
                 name: "Xiaomi MiMo".to_string(),
-                api_type: "openai".to_string(),
+                api_format: ApiFormat::OpenAiChat,
                 base_url: "https://api.mimo.xiaomi.com/v1".to_string(),
                 api_key: "sk-xxx".to_string(),
                 model: "mimo-2.5-pro".to_string(),
@@ -376,7 +395,7 @@ pub fn generate_example_config() -> AppConfig {
             ProviderConfig {
                 id: "kimi".to_string(),
                 name: "Moonshot Kimi".to_string(),
-                api_type: "openai".to_string(),
+                api_format: ApiFormat::OpenAiChat,
                 base_url: "https://api.moonshot.cn/v1".to_string(),
                 api_key: "sk-xxx".to_string(),
                 model: "kimi-2.5".to_string(),
@@ -388,7 +407,7 @@ pub fn generate_example_config() -> AppConfig {
             ProviderConfig {
                 id: "glm".to_string(),
                 name: "Zhipu GLM".to_string(),
-                api_type: "openai".to_string(),
+                api_format: ApiFormat::OpenAiChat,
                 base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
                 api_key: "xxx".to_string(),
                 model: "glm-5.1".to_string(),
@@ -400,7 +419,7 @@ pub fn generate_example_config() -> AppConfig {
             ProviderConfig {
                 id: "qwen".to_string(),
                 name: "Alibaba Qwen".to_string(),
-                api_type: "openai".to_string(),
+                api_format: ApiFormat::OpenAiChat,
                 base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
                 api_key: "sk-xxx".to_string(),
                 model: "qwen2.5-plus".to_string(),
