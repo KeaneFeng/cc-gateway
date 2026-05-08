@@ -1,8 +1,8 @@
 [package]
-name = "cc-switch-pro"
-version = "0.2.0"
+name = "cc-gateway"
+version = "0.3.0"
 edition = "2021"
-description = "Lightweight multi-provider aggregation proxy for Claude Code"
+description = "Multi-provider aggregation gateway for Claude Code"
 license = "MIT"
 
 [dependencies]

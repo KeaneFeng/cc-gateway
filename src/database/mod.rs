@@ -81,8 +81,8 @@ impl Database {
     pub fn open_cc_switch_compatible() -> anyhow::Result<Self> {
         let path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".cc-switch-pro")
-            .join("cc-switch-pro.db");
+            .join(".cc-gateway")
+            .join("cc-gateway.db");
 
         Self::open(&path)
     }
@@ -472,14 +472,14 @@ impl Database {
     pub fn get_usage_summary(&self, app_type: &str, days: i32) -> anyhow::Result<UsageSummary> {
         let mut stmt = self.conn.prepare(
             "SELECT 
-                COALESCE(SUM(request_count), 0) as total_requests,
-                COALESCE(SUM(success_count), 0) as total_success,
+                COUNT(*) as total_requests,
+                SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) as total_success,
                 COALESCE(SUM(input_tokens), 0) as total_input_tokens,
                 COALESCE(SUM(output_tokens), 0) as total_output_tokens,
                 COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0) as total_cost,
-                COALESCE(AVG(avg_latency_ms), 0) as avg_latency
-             FROM usage_daily_rollups 
-             WHERE app_type = ?1 AND date >= date('now', '-' || ?2 || ' days')"
+                CAST(COALESCE(AVG(latency_ms), 0) AS INTEGER) as avg_latency
+             FROM proxy_request_logs 
+             WHERE app_type = ?1 AND created_at >= strftime('%s', 'now', '-' || ?2 || ' days')"
         )?;
 
         let summary = stmt.query_row(params![app_type, days], |row| {

@@ -78,14 +78,14 @@ impl Default for AppConfig {
 
 impl AppConfig {
     /// Load config from file
-    pub fn load(path: &PathBuf) -> anyhow::Result<Self> {
+    pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let config: AppConfig = toml::from_str(&content)?;
         Ok(config)
     }
 
     /// Save config to file
-    pub fn save(&self, path: &PathBuf) -> anyhow::Result<()> {
+    pub fn save(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let content = toml::to_string_pretty(self)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -98,7 +98,7 @@ impl AppConfig {
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".cc-switch-pro")
+            .join(".cc-gateway")
             .join("config.toml")
     }
 

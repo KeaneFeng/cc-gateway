@@ -10,9 +10,11 @@ use axum::{
 };
 use futures::StreamExt;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use tracing::{info, warn};
+use std::sync::{Arc, Mutex};
 
 use crate::config::AppConfig;
+use crate::database::{Database, RequestLog};
 use crate::error::ProxyError;
 use crate::provider::Provider;
 use crate::proxy::{streaming, transform};
@@ -22,6 +24,7 @@ use crate::proxy::{streaming, transform};
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub providers: Vec<Provider>,
+    pub db: Arc<Mutex<Database>>,
 }
 
 impl AppState {
@@ -32,9 +35,13 @@ impl AppState {
             .map(|c| Provider::new(c.clone()))
             .collect::<Result<Vec<_>, _>>()?;
 
+        let db = Database::open_cc_switch_compatible()
+            .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?;
+
         Ok(Self {
             config: Arc::new(config),
             providers,
+            db: Arc::new(Mutex::new(db)),
         })
     }
 
@@ -111,6 +118,21 @@ pub async fn handle_messages(
             .ok_or(ProxyError::ProviderNotFound(model_id.to_string()))?
     };
 
+    // Log the routing decision
+    info!(
+        "🔵 Request: model_id={} → provider={} (name={}, url={}, format={})",
+        model_id,
+        provider.config.id,
+        provider.config.name,
+        provider.config.base_url,
+        if is_anthropic_format(provider) { "anthropic" } else { "openai" }
+    );
+
+    // Replace model in body with provider's actual model name
+    let mut body = body.clone();
+    body["model"] = serde_json::json!(provider.config.model);
+    info!("📝 Model replaced: {} → {}", model_id, provider.config.model);
+
     // Check if streaming is requested
     let is_stream = body.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
 
@@ -144,16 +166,20 @@ pub async fn handle_messages(
                 )));
             }
 
-            // Return Anthropic SSE stream directly
-            let byte_stream = response.bytes_stream();
-            let sse_stream = byte_stream.map(|result| {
-                result.map(|bytes| {
-                    let data = String::from_utf8_lossy(&bytes).to_string();
-                    axum::response::sse::Event::default().data(data)
-                })
+            // For Anthropic format, directly forward the raw SSE stream
+            // The upstream already sends proper SSE format
+            let stream = response.bytes_stream();
+            let body_stream = stream.map(|result| {
+                result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
             });
-
-            Ok(Sse::new(sse_stream).into_response())
+            
+            Ok(axum::response::Response::builder()
+                .status(200)
+                .header("content-type", "text/event-stream")
+                .header("cache-control", "no-cache")
+                .header("connection", "keep-alive")
+                .body(axum::body::Body::from_stream(body_stream))
+                .unwrap())
         } else {
             let response = provider
                 .forward_anthropic_request(endpoint, body, headers_vec)
@@ -173,6 +199,37 @@ pub async fn handle_messages(
                 .json()
                 .await
                 .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
+
+            // Log usage for Anthropic format
+            let usage = anthropic_response.get("usage");
+            let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+            let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+            let cache_read = usage.and_then(|u| u.get("cache_read_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+            let cache_creation = usage.and_then(|u| u.get("cache_creation_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+            
+            let request_id = format!("req_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+            let db = state.db.lock().unwrap();
+            match db.log_request(&RequestLog {
+                request_id,
+                provider_id: provider.config.id.clone(),
+                app_type: "claude".to_string(),
+                model: provider.config.model.clone(),
+                input_tokens,
+                output_tokens,
+                cache_read_tokens: cache_read,
+                cache_creation_tokens: cache_creation,
+                total_cost_usd: 0.0,
+                latency_ms: 0,
+                first_token_ms: None,
+                status_code: 200,
+                error_message: None,
+                session_id: None,
+                is_streaming: false,
+                created_at: chrono::Utc::now().timestamp(),
+            }) {
+                Ok(_) => info!("📊 Usage logged: provider={} tokens={}/{}", provider.config.name, input_tokens, output_tokens),
+                Err(e) => warn!("⚠️ Failed to log usage: {}", e),
+            }
 
             Ok(Json(anthropic_response).into_response())
         }
@@ -235,6 +292,38 @@ pub async fn handle_messages(
             let anthropic_response =
                 transform::openai_to_anthropic_response(openai_response, &provider.config.model);
 
+            // Log usage
+            let usage = anthropic_response.get("usage");
+            let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+            let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+            let cache_read = usage.and_then(|u| u.get("cache_read_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+            let cache_creation = usage.and_then(|u| u.get("cache_creation_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+            
+            let request_id = format!("req_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+            let db = state.db.lock().unwrap();
+            match db.log_request(&RequestLog {
+                request_id,
+                provider_id: provider.config.id.clone(),
+                app_type: "claude".to_string(),
+                model: provider.config.model.clone(),
+                input_tokens,
+                output_tokens,
+                cache_read_tokens: cache_read,
+                cache_creation_tokens: cache_creation,
+                total_cost_usd: 0.0,
+                latency_ms: 0,
+                first_token_ms: None,
+                status_code: 200,
+                error_message: None,
+                session_id: None,
+                is_streaming: false,
+                created_at: chrono::Utc::now().timestamp(),
+            }) {
+                Ok(_) => info!("📊 Usage logged: provider={} tokens={}/{}", provider.config.name, input_tokens, output_tokens),
+                Err(e) => warn!("⚠️ Failed to log usage: {}", e),
+            }
+            
+            info!("✅ Response: provider={} completed, tokens={}/{}", provider.config.name, input_tokens, output_tokens);
             Ok(Json(anthropic_response).into_response())
         }
     }

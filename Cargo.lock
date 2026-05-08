@@ -213,8 +213,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "cc-switch-pro"
-version = "0.2.0"
+name = "cc-gateway"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",

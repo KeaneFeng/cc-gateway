@@ -1,51 +1,123 @@
-//! Interactive TUI module
+//! Interactive TUI Dashboard
 //!
-//! Provides interactive terminal UI with arrow keys, TAB, space, enter navigation
+//! Default mode: shows provider overview with interactive commands
 
 use crate::config::{AppConfig, ProviderConfig, ProviderUpdate, presets};
 use console::{style, Term};
-use dialoguer::{Select, Input, Confirm};
-use std::path::PathBuf;
+use dialoguer::{Select, Input, Confirm, theme::ColorfulTheme};
+use std::path::Path;
 
-/// Run interactive mode
-pub fn run_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
+/// Main dashboard - default mode when no subcommand given
+pub fn run_dashboard(config_path: &str) -> anyhow::Result<()> {
+    let path = Path::new(config_path);
     let term = Term::stdout();
+    let theme = ColorfulTheme::default();
 
     loop {
         term.clear_screen()?;
-        print_header(&term)?;
 
+        // Header
+        term.write_line(&format!(
+            "\n  {} {}",
+            style("cc-gateway").cyan().bold(),
+            style("v0.3.0").dim()
+        ))?;
+        term.write_line(&format!(
+            "  {}",
+            style("Multi-provider aggregation gateway for Claude Code").dim()
+        ))?;
+        term.write_line("")?;
+
+        // Load config
+        let config = if path.exists() {
+            AppConfig::load(path)?
+        } else {
+            AppConfig::default()
+        };
+
+        // Provider table
+        if config.providers.is_empty() {
+            term.write_line(&format!(
+                "  {} No providers configured.",
+                style("⚠").yellow()
+            ))?;
+            term.write_line(&format!(
+                "  Run {} to add your first provider.\n",
+                style("cc-gateway add").green()
+            ))?;
+        } else {
+            term.write_line(&format!(
+                "  {:<4} {:<18} {:<25} {:<8}",
+                style("#").dim(),
+                style("ID").dim(),
+                style("Model").dim(),
+                style("Default").dim()
+            ))?;
+            term.write_line(&format!("  {}", style("─".repeat(58)).dim()))?;
+
+            for (i, p) in config.providers.iter().enumerate() {
+                let default = if p.is_default {
+                    style("⭐").yellow().to_string()
+                } else {
+                    String::new()
+                };
+                term.write_line(&format!(
+                    "  {:<4} {:<18} {:<25} {}",
+                    i + 1,
+                    style(&p.id).green(),
+                    format!("claude-{}", p.id),
+                    default
+                ))?;
+            }
+            term.write_line("")?;
+        }
+
+        // Menu
         let options = vec![
-            "📋 List providers",
-            "➕ Add provider (from preset)",
-            "➕ Add provider (custom)",
-            "✏️  Edit provider",
-            "📋 Copy provider",
-            "🗑️  Remove provider",
-            "⭐ Set default provider",
-            "📦 List presets",
-            "📥 Import from cc-switch",
-            "❌ Exit",
+            "➕  Add provider",
+            "✏️   Edit provider",
+            "🗑️   Remove provider",
+            "⭐  Set default",
+            "🔌  Test connections",
+            "📊  Show status",
+            "📥  Import from cc-switch",
+            "📦  Browse presets",
+            "❌  Exit",
         ];
 
-        let selection = Select::new()
+        let selection = Select::with_theme(&theme)
             .with_prompt("What do you want to do?")
             .items(&options)
             .default(0)
             .interact()?;
 
         match selection {
-            0 => list_providers_interactive(config_path)?,
-            1 => add_from_preset_interactive(config_path)?,
-            2 => add_custom_interactive(config_path)?,
-            3 => edit_provider_interactive(config_path)?,
-            4 => copy_provider_interactive(config_path)?,
-            5 => remove_provider_interactive(config_path)?,
-            6 => set_default_interactive(config_path)?,
-            7 => list_presets_interactive()?,
-            8 => import_interactive(config_path)?,
-            9 => {
-                println!("Goodbye!");
+            0 => add_provider(path, None)?,
+            1 => edit_provider(path, None)?,
+            2 => remove_provider(path, None)?,
+            3 => set_default(path, None)?,
+            4 => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(crate::commands::test::run_test(
+                    &path.to_string_lossy(),
+                    None,
+                ))?;
+                term.write_line("\n  Press Enter to continue...")?;
+                term.read_line()?;
+            }
+            5 => {
+                crate::commands::status::show_status(&path.to_string_lossy())?;
+                term.write_line("\n  Press Enter to continue...")?;
+                term.read_line()?;
+            }
+            6 => import_providers(path, None)?,
+            7 => {
+                crate::commands::presets::show_presets(None)?;
+                term.write_line("\n  Press Enter to continue...")?;
+                term.read_line()?;
+            }
+            8 => {
+                term.write_line("\n  Goodbye! 👋")?;
                 break;
             }
             _ => {}
@@ -55,332 +127,414 @@ pub fn run_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_header(term: &Term) -> anyhow::Result<()> {
-    term.write_line("")?;
-    term.write_line(&format!("{}", style("╔═══════════════════════════════════════════════════════════╗").cyan()))?;
-    term.write_line(&format!("{}", style("║           CC-Switch-Pro - Provider Manager               ║").cyan()))?;
-    term.write_line(&format!("{}", style("╚═══════════════════════════════════════════════════════════╝").cyan()))?;
-    term.write_line("")?;
-    Ok(())
-}
-
-fn list_providers_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
+/// Add a provider (interactive or from preset)
+pub fn add_provider(config_path: &Path, preset_id: Option<&str>) -> anyhow::Result<()> {
     let term = Term::stdout();
+    let theme = ColorfulTheme::default();
     term.clear_screen()?;
 
-    let config = if config_path.exists() { AppConfig::load(config_path)? } else { AppConfig::default() };
-
-    if config.providers.is_empty() {
-        term.write_line("\n  No providers configured.\n")?;
-        term.write_line("  Press Enter to continue...")?;
-        term.read_line()?;
-        return Ok(());
-    }
-
-    term.write_line("\n  Configured Providers:")?;
-    term.write_line("  ────────────────────────────────────────────────────────────────────────")?;
-    term.write_line(&format!("  {:<5} {:<15} {:<25} {:<15} {:<8}", "#", "ID", "Name", "Model ID", "Default"))?;
-    term.write_line("  ────────────────────────────────────────────────────────────────────────")?;
-
-    for (i, p) in config.providers.iter().enumerate() {
-        let default = if p.is_default { "  ⭐" } else { "" };
-        let notes = p.notes.as_deref().unwrap_or("");
-        term.write_line(&format!("  {:<5} {:<15} {:<25} {:<15} {:<8}", i + 1, truncate(&p.id, 14), truncate(&p.name, 24), truncate(notes, 14), default))?;
-    }
-
-    term.write_line("  ────────────────────────────────────────────────────────────────────────")?;
-    term.write_line(&format!("  Total: {} providers", config.providers.len()))?;
-    term.write_line("")?;
-
-    let mut items: Vec<String> = config.providers.iter().map(|p| {
-        let default = if p.is_default { " ⭐" } else { "" };
-        let notes = p.notes.as_deref().unwrap_or("");
-        format!("{} ({}){} - {}", p.id, p.name, default, notes)
-    }).collect();
-    items.push("← Back".to_string());
-
-    let selection = Select::new().with_prompt("Select provider to view details").items(&items).default(0).interact()?;
-
-    if selection < config.providers.len() {
-        let p = &config.providers[selection];
-        term.clear_screen()?;
-        term.write_line("\n  Provider Details:")?;
-        term.write_line("  ─────────────────────────────────────────────")?;
-        term.write_line(&format!("  ID:          {}", p.id))?;
-        term.write_line(&format!("  Name:        {}", p.name))?;
-        term.write_line(&format!("  Model ID:    claude-{}", p.id))?;
-        term.write_line(&format!("  Model:       {}", p.model))?;
-        term.write_line(&format!("  URL:         {}", p.base_url))?;
-        if !p.api_key.is_empty() { term.write_line(&format!("  API Key:     {}...", &p.api_key[..std::cmp::min(8, p.api_key.len())]))?; }
-        if let Some(ref dn) = p.display_name { term.write_line(&format!("  Display:     {}", dn))?; }
-        if let Some(ref n) = p.notes { term.write_line(&format!("  Notes:       {}", n))?; }
-        term.write_line(&format!("  Default:     {}", if p.is_default { "Yes ⭐" } else { "No" }))?;
-        term.write_line("  ─────────────────────────────────────────────")?;
-        term.write_line("\n  Press Enter to continue...")?;
-        term.read_line()?;
-    }
-
-    Ok(())
-}
-
-fn add_from_preset_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
-    let term = Term::stdout();
-    term.clear_screen()?;
-
-    let mut config = if config_path.exists() { AppConfig::load(config_path)? } else { AppConfig::default() };
-
-    let categories = presets::get_categories();
-    let category_items: Vec<String> = categories.iter().map(|c| format!("{} ({})", presets::get_category_display_name(c), presets::get_presets_by_category(c).len())).collect();
-
-    term.write_line("\n  Select category:")?;
-    let cat_selection = Select::new().with_prompt("Category").items(&category_items).default(0).interact()?;
-
-    let selected_category = categories[cat_selection];
-    let presets_list = presets::get_presets_by_category(selected_category);
-    let preset_items: Vec<String> = presets_list.iter().map(|p| format!("{} - {}", p.id, p.display_name)).collect();
-
-    let preset_selection = Select::new().with_prompt("Select preset").items(&preset_items).default(0).interact()?;
-    let selected_preset = &presets_list[preset_selection];
-
-    let api_key: String = Input::new().with_prompt("API Key").interact_text()?;
-    let custom_id: String = Input::new().with_prompt("Custom ID (leave empty for default)").default(selected_preset.id.to_string()).interact_text()?;
-    let is_default = Confirm::new().with_prompt("Set as default provider?").default(false).interact()?;
-
-    let provider = ProviderConfig {
-        id: custom_id,
-        name: selected_preset.name.to_string(),
-        api_type: "openai".to_string(),
-        base_url: selected_preset.base_url.to_string(),
-        api_key,
-        model: selected_preset.model.to_string(),
-        display_name: Some(selected_preset.display_name.to_string()),
-        is_default,
-        preset_id: Some(selected_preset.id.to_string()),
-        notes: None,
+    let mut config = if config_path.exists() {
+        AppConfig::load(config_path)?
+    } else {
+        AppConfig::default()
     };
 
-    config.add_provider(provider)?;
-    config.save(config_path)?;
+    let provider = if let Some(preset_id) = preset_id {
+        // Add from preset
+        let preset = presets::get_preset_by_id(preset_id)
+            .ok_or_else(|| anyhow::anyhow!("Preset '{}' not found", preset_id))?;
 
-    term.write_line(&format!("\n  {} Provider '{}' added successfully!", style("✓").green(), selected_preset.id))?;
-    term.write_line("  Press Enter to continue...")?;
-    term.read_line()?;
-    Ok(())
-}
+        term.write_line(&format!(
+            "\n  {} Adding from preset: {}",
+            style("➕").green(),
+            style(&preset.name).cyan()
+        ))?;
+        term.write_line(&format!(
+            "  {}",
+            style(&preset.display_name).dim()
+        ))?;
+        term.write_line("")?;
 
-fn add_custom_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
-    let term = Term::stdout();
-    term.clear_screen()?;
-    let mut config = if config_path.exists() { AppConfig::load(config_path)? } else { AppConfig::default() };
+        let api_key: String = Input::with_theme(&theme)
+            .with_prompt("  API Key")
+            .interact_text()?;
 
-    term.write_line("\n  Add Custom Provider:")?;
-    term.write_line("  ─────────────────────────────────────────────")?;
+        let custom_id: String = Input::with_theme(&theme)
+            .with_prompt("  Custom ID (Enter for default)")
+            .default(preset.id.to_string())
+            .interact_text()?;
 
-    let id: String = Input::new().with_prompt("Provider ID").interact_text()?;
-    let name: String = Input::new().with_prompt("Provider Name").interact_text()?;
-    let base_url: String = Input::new().with_prompt("Base URL").interact_text()?;
-    let api_key: String = Input::new().with_prompt("API Key").interact_text()?;
-    let model: String = Input::new().with_prompt("Model Name").interact_text()?;
-    let notes: String = Input::new().with_prompt("Notes (optional)").allow_empty(true).interact_text()?;
-    let is_default = Confirm::new().with_prompt("Set as default provider?").default(false).interact()?;
+        let is_default = Confirm::with_theme(&theme)
+            .with_prompt("  Set as default?")
+            .default(false)
+            .interact()?;
 
-    let provider = ProviderConfig {
-        id, name, api_type: "openai".to_string(), base_url, api_key, model,
-        display_name: None, is_default, preset_id: None,
-        notes: if notes.is_empty() { None } else { Some(notes) },
+        ProviderConfig {
+            id: custom_id,
+            name: preset.name.to_string(),
+            api_type: "openai".to_string(),
+            base_url: preset.base_url.to_string(),
+            api_key,
+            model: preset.model.to_string(),
+            display_name: Some(preset.display_name.to_string()),
+            is_default,
+            preset_id: Some(preset.id.to_string()),
+            notes: None,
+        }
+    } else {
+        // Interactive preset selection or custom
+        let categories = presets::get_categories();
+        let mut category_items: Vec<String> = categories
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} ({})",
+                    presets::get_category_display_name(c),
+                    presets::get_presets_by_category(c).len()
+                )
+            })
+            .collect();
+        category_items.push("Custom (manual)".to_string());
+
+        term.write_line(&format!(
+            "\n  {} Add provider",
+            style("➕").green()
+        ))?;
+        term.write_line("")?;
+
+        let cat_selection = Select::with_theme(&theme)
+            .with_prompt("  Select category")
+            .items(&category_items)
+            .default(0)
+            .interact()?;
+
+        if cat_selection < categories.len() {
+            // From preset
+            let selected_category = categories[cat_selection];
+            let presets_list = presets::get_presets_by_category(selected_category);
+            let preset_items: Vec<String> = presets_list
+                .iter()
+                .map(|p| format!("{} - {}", p.id, p.display_name))
+                .collect();
+
+            let preset_selection = Select::with_theme(&theme)
+                .with_prompt("  Select preset")
+                .items(&preset_items)
+                .default(0)
+                .interact()?;
+            let selected_preset = &presets_list[preset_selection];
+
+            let api_key: String = Input::with_theme(&theme)
+                .with_prompt("  API Key")
+                .interact_text()?;
+
+            let custom_id: String = Input::with_theme(&theme)
+                .with_prompt("  Custom ID (Enter for default)")
+                .default(selected_preset.id.to_string())
+                .interact_text()?;
+
+            let is_default = Confirm::with_theme(&theme)
+                .with_prompt("  Set as default?")
+                .default(false)
+                .interact()?;
+
+            ProviderConfig {
+                id: custom_id,
+                name: selected_preset.name.to_string(),
+                api_type: "openai".to_string(),
+                base_url: selected_preset.base_url.to_string(),
+                api_key,
+                model: selected_preset.model.to_string(),
+                display_name: Some(selected_preset.display_name.to_string()),
+                is_default,
+                preset_id: Some(selected_preset.id.to_string()),
+                notes: None,
+            }
+        } else {
+            // Custom provider
+            let id: String = Input::with_theme(&theme)
+                .with_prompt("  Provider ID")
+                .interact_text()?;
+            let name: String = Input::with_theme(&theme)
+                .with_prompt("  Provider Name")
+                .interact_text()?;
+            let base_url: String = Input::with_theme(&theme)
+                .with_prompt("  Base URL")
+                .interact_text()?;
+            let api_key: String = Input::with_theme(&theme)
+                .with_prompt("  API Key")
+                .interact_text()?;
+            let model: String = Input::with_theme(&theme)
+                .with_prompt("  Model Name")
+                .interact_text()?;
+            let is_default = Confirm::with_theme(&theme)
+                .with_prompt("  Set as default?")
+                .default(false)
+                .interact()?;
+
+            ProviderConfig {
+                id,
+                name,
+                api_type: "openai".to_string(),
+                base_url,
+                api_key,
+                model,
+                display_name: None,
+                is_default,
+                preset_id: None,
+                notes: None,
+            }
+        }
     };
 
     let provider_id = provider.id.clone();
     config.add_provider(provider)?;
     config.save(config_path)?;
 
-    term.write_line(&format!("\n  {} Provider '{}' added successfully!", style("✓").green(), provider_id))?;
+    term.write_line(&format!(
+        "\n  {} Provider '{}' added!",
+        style("✓").green(),
+        style(&provider_id).cyan()
+    ))?;
     term.write_line("  Press Enter to continue...")?;
     term.read_line()?;
     Ok(())
 }
 
-fn edit_provider_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
+/// Edit a provider
+pub fn edit_provider(config_path: &Path, id: Option<&str>) -> anyhow::Result<()> {
     let term = Term::stdout();
+    let theme = ColorfulTheme::default();
     term.clear_screen()?;
-    let mut config = if config_path.exists() { AppConfig::load(config_path)? } else { AppConfig::default() };
+
+    let mut config = AppConfig::load(config_path)?;
 
     if config.providers.is_empty() {
-        term.write_line("\n  No providers to edit.\n")?;
+        term.write_line("\n  No providers to edit.")?;
         term.write_line("  Press Enter to continue...")?;
         term.read_line()?;
         return Ok(());
     }
 
-    let items: Vec<String> = config.providers.iter().map(|p| format!("{} ({})", p.id, p.name)).collect();
-    let selection = Select::new().with_prompt("Select provider to edit").items(&items).default(0).interact()?;
-    let provider = &config.providers[selection];
+    let provider_idx = if let Some(id) = id {
+        config
+            .providers
+            .iter()
+            .position(|p| p.id == id)
+            .ok_or_else(|| anyhow::anyhow!("Provider '{}' not found", id))?
+    } else {
+        let items: Vec<String> = config
+            .providers
+            .iter()
+            .map(|p| {
+                let default = if p.is_default { " ⭐" } else { "" };
+                format!("{} ({}){}", p.id, p.name, default)
+            })
+            .collect();
+        Select::with_theme(&theme)
+            .with_prompt("  Select provider to edit")
+            .items(&items)
+            .default(0)
+            .interact()?
+    };
 
-    term.write_line("\n  Edit Provider (press Enter to keep current value):")?;
-    term.write_line("  ─────────────────────────────────────────────")?;
-
-    let name: String = Input::new().with_prompt("Name").default(provider.name.clone()).interact_text()?;
-    let base_url: String = Input::new().with_prompt("Base URL").default(provider.base_url.clone()).interact_text()?;
-    let api_key: String = Input::new().with_prompt("API Key").default(provider.api_key.clone()).interact_text()?;
-    let model: String = Input::new().with_prompt("Model").default(provider.model.clone()).interact_text()?;
-    let notes: String = Input::new().with_prompt("Notes").default(provider.notes.clone().unwrap_or_default()).interact_text()?;
-    let is_default = Confirm::new().with_prompt("Set as default provider?").default(provider.is_default).interact()?;
-
+    let provider = &config.providers[provider_idx];
     let provider_id = provider.id.clone();
+
+    term.write_line(&format!(
+        "\n  {} Edit provider '{}'",
+        style("✏️").cyan(),
+        style(&provider_id).green()
+    ))?;
+    term.write_line("  (Press Enter to keep current value)\n")?;
+
+    let name: String = Input::with_theme(&theme)
+        .with_prompt("  Name")
+        .default(provider.name.clone())
+        .interact_text()?;
+    let base_url: String = Input::with_theme(&theme)
+        .with_prompt("  Base URL")
+        .default(provider.base_url.clone())
+        .interact_text()?;
+    let api_key: String = Input::with_theme(&theme)
+        .with_prompt("  API Key")
+        .default(provider.api_key.clone())
+        .interact_text()?;
+    let model: String = Input::with_theme(&theme)
+        .with_prompt("  Model")
+        .default(provider.model.clone())
+        .interact_text()?;
+    let is_default = Confirm::with_theme(&theme)
+        .with_prompt("  Set as default?")
+        .default(provider.is_default)
+        .interact()?;
+
     let updates = ProviderUpdate {
-        name: Some(name), base_url: Some(base_url), api_key: Some(api_key), model: Some(model),
-        display_name: None, is_default: Some(is_default),
-        notes: if notes.is_empty() { None } else { Some(notes) },
+        name: Some(name),
+        base_url: Some(base_url),
+        api_key: Some(api_key),
+        model: Some(model),
+        display_name: None,
+        is_default: Some(is_default),
+        notes: None,
     };
 
     config.update_provider(&provider_id, updates)?;
     config.save(config_path)?;
 
-    term.write_line(&format!("\n  {} Provider '{}' updated!", style("✓").green(), provider_id))?;
+    term.write_line(&format!(
+        "\n  {} Provider '{}' updated!",
+        style("✓").green(),
+        style(&provider_id).cyan()
+    ))?;
     term.write_line("  Press Enter to continue...")?;
     term.read_line()?;
     Ok(())
 }
 
-fn copy_provider_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
+/// Remove a provider
+pub fn remove_provider(config_path: &Path, id: Option<&str>) -> anyhow::Result<()> {
     let term = Term::stdout();
+    let theme = ColorfulTheme::default();
     term.clear_screen()?;
-    let mut config = if config_path.exists() { AppConfig::load(config_path)? } else { AppConfig::default() };
+
+    let mut config = AppConfig::load(config_path)?;
 
     if config.providers.is_empty() {
-        term.write_line("\n  No providers to copy.\n")?;
+        term.write_line("\n  No providers to remove.")?;
         term.write_line("  Press Enter to continue...")?;
         term.read_line()?;
         return Ok(());
     }
 
-    let items: Vec<String> = config.providers.iter().map(|p| format!("{} ({})", p.id, p.name)).collect();
-    let selection = Select::new().with_prompt("Select provider to copy").items(&items).default(0).interact()?;
-    let source_id = config.providers[selection].id.clone();
+    let provider_id = if let Some(id) = id {
+        id.to_string()
+    } else {
+        let items: Vec<String> = config
+            .providers
+            .iter()
+            .map(|p| {
+                let default = if p.is_default { " ⭐" } else { "" };
+                format!("{} ({}){}", p.id, p.name, default)
+            })
+            .collect();
+        let selection = Select::with_theme(&theme)
+            .with_prompt("  Select provider to remove")
+            .items(&items)
+            .default(0)
+            .interact()?;
+        config.providers[selection].id.clone()
+    };
 
-    let new_id: String = Input::new().with_prompt("New provider ID").default(format!("{}-copy", source_id)).interact_text()?;
+    let confirm = Confirm::with_theme(&theme)
+        .with_prompt(format!("  Remove provider '{}'?", provider_id))
+        .default(false)
+        .interact()?;
 
-    config.copy_provider(&source_id, &new_id)?;
-    config.save(config_path)?;
-
-    term.write_line(&format!("\n  {} Provider '{}' copied to '{}'!", style("✓").green(), source_id, new_id))?;
-    term.write_line("  Press Enter to continue...")?;
-    term.read_line()?;
-    Ok(())
-}
-
-fn remove_provider_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
-    let term = Term::stdout();
-    term.clear_screen()?;
-    let mut config = if config_path.exists() { AppConfig::load(config_path)? } else { AppConfig::default() };
-
-    if config.providers.is_empty() {
-        term.write_line("\n  No providers to remove.\n")?;
-        term.write_line("  Press Enter to continue...")?;
-        term.read_line()?;
-        return Ok(());
-    }
-
-    let items: Vec<String> = config.providers.iter().map(|p| {
-        let default = if p.is_default { " ⭐" } else { "" };
-        format!("{} ({}){}", p.id, p.name, default)
-    }).collect();
-
-    let selection = Select::new().with_prompt("Select provider to remove").items(&items).default(0).interact()?;
-    let provider_id = config.providers[selection].id.clone();
-
-    let confirm = Confirm::new().with_prompt(format!("Remove provider '{}'?", provider_id)).default(false).interact()?;
     if confirm {
         config.remove_provider(&provider_id)?;
         config.save(config_path)?;
-        term.write_line(&format!("\n  {} Provider '{}' removed!", style("✓").green(), provider_id))?;
+        term.write_line(&format!(
+            "\n  {} Provider '{}' removed!",
+            style("✓").green(),
+            style(&provider_id).cyan()
+        ))?;
     } else {
         term.write_line("\n  Cancelled.")?;
     }
-
     term.write_line("  Press Enter to continue...")?;
     term.read_line()?;
     Ok(())
 }
 
-fn set_default_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
+/// Set default provider
+pub fn set_default(config_path: &Path, id: Option<&str>) -> anyhow::Result<()> {
     let term = Term::stdout();
+    let theme = ColorfulTheme::default();
     term.clear_screen()?;
-    let mut config = if config_path.exists() { AppConfig::load(config_path)? } else { AppConfig::default() };
+
+    let mut config = AppConfig::load(config_path)?;
 
     if config.providers.is_empty() {
-        term.write_line("\n  No providers configured.\n")?;
+        term.write_line("\n  No providers configured.")?;
         term.write_line("  Press Enter to continue...")?;
         term.read_line()?;
         return Ok(());
     }
 
-    let items: Vec<String> = config.providers.iter().map(|p| {
-        let default = if p.is_default { " ⭐ (current)" } else { "" };
-        format!("{} ({}){}", p.id, p.name, default)
-    }).collect();
-
-    let selection = Select::new().with_prompt("Select default provider").items(&items).default(0).interact()?;
-    let provider_id = config.providers[selection].id.clone();
+    let provider_id = if let Some(id) = id {
+        id.to_string()
+    } else {
+        let items: Vec<String> = config
+            .providers
+            .iter()
+            .map(|p| {
+                let default = if p.is_default { " ⭐ (current)" } else { "" };
+                format!("{} ({}){}", p.id, p.name, default)
+            })
+            .collect();
+        let selection = Select::with_theme(&theme)
+            .with_prompt("  Select default provider")
+            .items(&items)
+            .default(0)
+            .interact()?;
+        config.providers[selection].id.clone()
+    };
 
     config.set_default_provider(&provider_id)?;
     config.save(config_path)?;
 
-    term.write_line(&format!("\n  {} Default provider set to '{}'!", style("✓").green(), provider_id))?;
+    term.write_line(&format!(
+        "\n  {} Default set to '{}'!",
+        style("⭐").yellow(),
+        style(&provider_id).cyan()
+    ))?;
     term.write_line("  Press Enter to continue...")?;
     term.read_line()?;
     Ok(())
 }
 
-fn list_presets_interactive() -> anyhow::Result<()> {
+/// Import providers from cc-switch
+pub fn import_providers(config_path: &Path, db_path: Option<&str>) -> anyhow::Result<()> {
     let term = Term::stdout();
+    let theme = ColorfulTheme::default();
     term.clear_screen()?;
 
-    let categories = presets::get_categories();
-    let category_items: Vec<String> = categories.iter().map(|c| format!("{} ({})", presets::get_category_display_name(c), presets::get_presets_by_category(c).len())).collect();
+    term.write_line(&format!(
+        "\n  {} Import from cc-switch",
+        style("📥").cyan()
+    ))?;
 
-    term.write_line("\n  Available Presets:")?;
-
-    loop {
-        let cat_selection = Select::new().with_prompt("Select category").items(&category_items).default(0).interact()?;
-        let selected_category = categories[cat_selection];
-        let presets_list = presets::get_presets_by_category(selected_category);
-
-        term.write_line(&format!("\n  {} presets:", presets::get_category_display_name(selected_category)))?;
-        term.write_line("  ────────────────────────────────────────────────────────────────────────")?;
-        term.write_line(&format!("  {:<20} {:<30} {}", "ID", "Name", "Display Name"))?;
-        term.write_line("  ────────────────────────────────────────────────────────────────────────")?;
-
-        for p in &presets_list {
-            term.write_line(&format!("  {:<20} {:<30} {}", p.id, p.name, p.display_name))?;
-        }
-
-        term.write_line("  ────────────────────────────────────────────────────────────────────────")?;
-        term.write_line("\n  Press Enter to go back...")?;
-        term.read_line()?;
-        term.clear_screen()?;
-    }
-}
-
-fn import_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
-    let term = Term::stdout();
-    term.clear_screen()?;
-
-    term.write_line("\n  Import from cc-switch:")?;
-    term.write_line("  ─────────────────────────────────────────────")?;
-
-    let cc_switch_db = dirs::home_dir().unwrap_or_default().join(".cc-switch").join("cc-switch.db");
+    let cc_switch_db = if let Some(db) = db_path {
+        std::path::PathBuf::from(db)
+    } else {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".cc-switch")
+            .join("cc-switch.db")
+    };
 
     if !cc_switch_db.exists() {
-        term.write_line(&format!("\n  {} cc-switch database not found at: {}", style("✗").red(), cc_switch_db.display()))?;
+        term.write_line(&format!(
+            "  {} cc-switch database not found at: {}",
+            style("✗").red(),
+            cc_switch_db.display()
+        ))?;
         term.write_line("  Press Enter to continue...")?;
         term.read_line()?;
         return Ok(());
     }
 
-    term.write_line(&format!("  Found cc-switch database: {}", cc_switch_db.display()))?;
+    term.write_line(&format!(
+        "  Found: {}",
+        style(cc_switch_db.display()).dim()
+    ))?;
 
-    let confirm = Confirm::new().with_prompt("Import providers from cc-switch?").default(true).interact()?;
+    let confirm = Confirm::with_theme(&theme)
+        .with_prompt("  Import providers?")
+        .default(true)
+        .interact()?;
+
     if !confirm {
         term.write_line("  Cancelled.")?;
         term.write_line("  Press Enter to continue...")?;
@@ -389,28 +543,34 @@ fn import_interactive(config_path: &PathBuf) -> anyhow::Result<()> {
     }
 
     let imported_config = crate::config::import_from_cc_switch()?;
-    let mut config = if config_path.exists() { AppConfig::load(config_path)? } else { AppConfig::default() };
+    let mut config = if config_path.exists() {
+        AppConfig::load(config_path)?
+    } else {
+        AppConfig::default()
+    };
 
-    let mut imported_count = 0;
+    let mut count = 0;
     for provider in imported_config.providers {
         if !config.providers.iter().any(|p| p.id == provider.id) {
             config.providers.push(provider);
-            imported_count += 1;
+            count += 1;
         }
     }
 
     if !config.providers.iter().any(|p| p.is_default) {
-        if let Some(first) = config.providers.first_mut() { first.is_default = true; }
+        if let Some(first) = config.providers.first_mut() {
+            first.is_default = true;
+        }
     }
 
     config.save(config_path)?;
 
-    term.write_line(&format!("\n  {} Imported {} providers from cc-switch!", style("✓").green(), imported_count))?;
+    term.write_line(&format!(
+        "\n  {} Imported {} providers!",
+        style("✓").green(),
+        style(count).cyan()
+    ))?;
     term.write_line("  Press Enter to continue...")?;
     term.read_line()?;
     Ok(())
-}
-
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len { s.to_string() } else { format!("{}...", &s[..max_len - 3]) }
 }

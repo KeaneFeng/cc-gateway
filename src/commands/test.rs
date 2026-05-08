@@ -2,8 +2,11 @@
 //!
 //! Test connectivity to providers
 
+use crate::config::AppConfig;
 use crate::database::{Database, StreamCheckLog};
+use console::style;
 use reqwest::Client;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// Test result
@@ -24,6 +27,85 @@ pub struct TestProvider {
     pub base_url: String,
     pub api_key: String,
     pub api_type: String,
+}
+
+/// Run connection tests (called from CLI)
+pub async fn run_test(config_path: &str, id: Option<&str>) -> anyhow::Result<()> {
+    let path = Path::new(config_path);
+    let config = if path.exists() {
+        AppConfig::load(path)?
+    } else {
+        AppConfig::default()
+    };
+
+    if config.providers.is_empty() {
+        println!("  {} No providers configured.", style("⚠").yellow());
+        return Ok(());
+    }
+
+    let providers: Vec<TestProvider> = if let Some(id) = id {
+        config
+            .providers
+            .iter()
+            .filter(|p| p.id == id)
+            .map(|p| TestProvider {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                base_url: p.base_url.clone(),
+                api_key: p.api_key.clone(),
+                api_type: p.api_type.clone(),
+            })
+            .collect()
+    } else {
+        config
+            .providers
+            .iter()
+            .map(|p| TestProvider {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                base_url: p.base_url.clone(),
+                api_key: p.api_key.clone(),
+                api_type: p.api_type.clone(),
+            })
+            .collect()
+    };
+
+    println!("\n  {} Testing connections...\n", style("🔌").cyan());
+
+    let results = test_all_providers(&providers).await;
+
+    for result in &results {
+        let status = if result.success {
+            style("✓").green().to_string()
+        } else {
+            style("✗").red().to_string()
+        };
+        let time = result
+            .response_time_ms
+            .map(|t| format!("{}ms", t))
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  {} {:<18} {:<6} {}",
+            status,
+            style(&result.provider_id).cyan(),
+            time,
+            if result.success {
+                style("OK".to_string()).green().to_string()
+            } else {
+                style(result.message.clone()).red().to_string()
+            }
+        );
+    }
+
+    let success_count = results.iter().filter(|r| r.success).count();
+    println!(
+        "\n  {} {}/{} providers connected\n",
+        style("ℹ").blue(),
+        style(success_count).green(),
+        style(results.len()).cyan()
+    );
+
+    Ok(())
 }
 
 /// Test connection to a provider
