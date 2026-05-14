@@ -12,6 +12,16 @@ impl Provider {
     /// Create a new provider instance
     pub fn new(config: ProviderConfig) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
+            // Force HTTP/1.1 — many providers (Volcengine, etc.) don't handle HTTP/2 properly
+            // cc-switch also uses HTTP/1.1 via hyper directly
+            .http1_only()
+            // Disable auto-decompression — we handle accept-encoding manually
+            // Prevents reqwest from interfering with SSE streams and provider responses
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            // Timeouts: 30s connect, 300s total (matches cc-switch pattern)
+            .connect_timeout(std::time::Duration::from_secs(30))
             .timeout(std::time::Duration::from_secs(300))
             .build()?;
 
@@ -42,22 +52,36 @@ impl Provider {
 
         let mut request = self.client.post(&url);
 
-        // Set Anthropic auth header
-        request = request
-            .header("x-api-key", &self.config.api_key)
-            .header("anthropic-version", "2023-06-01");
+        // Set auth header (provider's API key)
+        request = request.header("x-api-key", &self.config.api_key);
 
-        // Forward relevant headers
-        for (key, value) in headers {
+        // Forward ALL original headers, replacing only auth-related ones
+        let mut has_anthropic_version = false;
+        for (key, value) in &headers {
             let key_lower = key.to_lowercase();
-            if key_lower != "host"
-                && key_lower != "authorization"
-                && key_lower != "x-api-key"
-                && key_lower != "content-length"
-                && key_lower != "anthropic-version"
-            {
-                request = request.header(&key, &value);
+            // Skip: host, auth headers (we replace with provider's key)
+            if key_lower == "host" || key_lower == "authorization" || key_lower == "x-api-key" {
+                continue;
             }
+            // Skip content-length (reqwest recalculates from body)
+            if key_lower == "content-length" {
+                continue;
+            }
+            // Force identity encoding — prevents compressed responses that break parsing
+            // (matches cc-switch pattern: no_gzip on client + identity on request)
+            if key_lower == "accept-encoding" {
+                request = request.header("accept-encoding", "identity");
+                continue;
+            }
+            if key_lower == "anthropic-version" {
+                has_anthropic_version = true;
+            }
+            request = request.header(key.as_str(), value.as_str());
+        }
+
+        // Set anthropic-version only if client didn't send it
+        if !has_anthropic_version {
+            request = request.header("anthropic-version", "2023-06-01");
         }
 
         request.json(&body).send().await
@@ -74,22 +98,35 @@ impl Provider {
 
         let mut request = self.client.post(&url);
 
-        // Set Anthropic auth header
-        request = request
-            .header("x-api-key", &self.config.api_key)
-            .header("anthropic-version", "2023-06-01");
+        // Set auth header (provider's API key)
+        request = request.header("x-api-key", &self.config.api_key);
 
-        // Forward relevant headers
-        for (key, value) in headers {
+        // Forward ALL original headers, replacing only auth-related ones
+        let mut has_anthropic_version = false;
+        for (key, value) in &headers {
             let key_lower = key.to_lowercase();
-            if key_lower != "host"
-                && key_lower != "authorization"
-                && key_lower != "x-api-key"
-                && key_lower != "content-length"
-                && key_lower != "anthropic-version"
-            {
-                request = request.header(&key, &value);
+            // Skip: host, auth headers (we replace with provider's key)
+            if key_lower == "host" || key_lower == "authorization" || key_lower == "x-api-key" {
+                continue;
             }
+            // Skip content-length (reqwest recalculates from body)
+            if key_lower == "content-length" {
+                continue;
+            }
+            // Force identity encoding for streaming (critical for SSE!)
+            if key_lower == "accept-encoding" {
+                request = request.header("accept-encoding", "identity");
+                continue;
+            }
+            if key_lower == "anthropic-version" {
+                has_anthropic_version = true;
+            }
+            request = request.header(key.as_str(), value.as_str());
+        }
+
+        // Set anthropic-version only if client didn't send it
+        if !has_anthropic_version {
+            request = request.header("anthropic-version", "2023-06-01");
         }
 
         // Force streaming
@@ -126,7 +163,12 @@ impl Provider {
                 && key_lower != "x-api-key"
                 && key_lower != "content-length"
             {
-                request = request.header(&key, &value);
+                // Force identity encoding
+                if key_lower == "accept-encoding" {
+                    request = request.header("accept-encoding", "identity");
+                } else {
+                    request = request.header(&key, &value);
+                }
             }
         }
 
@@ -161,7 +203,12 @@ impl Provider {
                 && key_lower != "x-api-key"
                 && key_lower != "content-length"
             {
-                request = request.header(&key, &value);
+                // Force identity encoding
+                if key_lower == "accept-encoding" {
+                    request = request.header("accept-encoding", "identity");
+                } else {
+                    request = request.header(&key, &value);
+                }
             }
         }
 

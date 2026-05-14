@@ -1,85 +1,143 @@
 # cc-gateway
 
-Multi-provider aggregation gateway for Claude Code.
+Multi-provider aggregation gateway for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-## What is this?
-
-A lightweight proxy that lets you use multiple AI providers (Mimo, Kimi, Qwen, GLM, etc.) with Claude Code. Configure providers once, then switch between them via `/model` in Claude Code — each terminal independently.
+Use multiple AI providers (Mimo, Kimi, Qwen, DeepSeek, GLM, etc.) with Claude Code — switch via `/model` per terminal.
 
 ```
-Terminal 1: claude → /model → claude-mimo    → Xiaomi Mimo 2.5 Pro
-Terminal 2: claude → /model → claude-kimi    → Moonshot Kimi 2.5
-Terminal 3: claude → /model → claude-qwen    → Alibaba Qwen 2.6 Plus
-Terminal 4: claude → /model → claude-glm     → Zhipu GLM 5.1
+Terminal 1: claude -> /model -> claude-mimo    -> Xiaomi Mimo 2.5 Pro
+Terminal 2: claude -> /model -> claude-kimi    -> Moonshot Kimi 2.5
+Terminal 3: claude -> /model -> claude-qwen    -> Alibaba Qwen 3.6 Plus
+Terminal 4: claude -> /model -> claude-deepseek -> DeepSeek R1
 ```
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
 ```bash
-# Homebrew (macOS/Linux)
-brew tap yourusername/cc-gateway
+brew tap KeaneFeng/cc-gateway https://github.com/KeaneFeng/cc-gateway
 brew install cc-gateway
+```
 
-# Cargo
+### Cargo
+
+```bash
 cargo install cc-gateway
+```
 
-# Build from source
-git clone https://github.com/yourusername/cc-gateway.git
+### Build from source
+
+```bash
+git clone https://github.com/KeaneFeng/cc-gateway.git
 cd cc-gateway
 cargo build --release
+# Binary at: target/release/cc-gateway
 ```
 
 ## Quick Start
 
 ```bash
-# 1. Launch interactive dashboard (default)
-cc-gateway
+# 1. Add providers from presets
+cc-gateway add mimo
+cc-gateway add kimi
 
-# 2. Add providers from presets
-cc-gateway add mimo      # Xiaomi Mimo
-cc-gateway add kimi      # Moonshot Kimi
-cc-gateway add glm       # Zhipu GLM
+# 2. Start the server (background)
+cc-gateway start -d
 
-# 3. Start the proxy
-cc-gateway serve
-
-# 4. Use Claude Code
-export ANTHROPIC_BASE_URL=http://127.0.0.1:16789
+# 3. Use Claude Code — it auto-configures ~/.claude/settings.json
 claude
-# In Claude Code: /model → select provider
+# In Claude Code: /model -> select provider
 ```
 
 ## Commands
 
+### Server Management
+
 ```bash
-cc-gateway              # Interactive dashboard (default)
-cc-gateway serve        # Start proxy server
-cc-gateway add [preset] # Add provider (interactive or from preset)
-cc-gateway edit [id]    # Edit provider
-cc-gateway remove [id]  # Remove provider
-cc-gateway default [id] # Set default provider
-cc-gateway test [id]    # Test connections
-cc-gateway status       # Show provider status
-cc-gateway import       # Import from cc-switch
-cc-gateway presets      # Browse presets
-cc-gateway config       # Show/edit config
+cc-gateway start              # Start server (foreground, Ctrl+C to stop)
+cc-gateway start -d           # Start server (background daemon)
+cc-gateway start -f           # Force start (auto-stops existing instance)
+cc-gateway stop               # Stop the running server
+cc-gateway restart            # Restart (stop + start, foreground)
+cc-gateway restart -d         # Restart (background)
+```
+
+### Provider Management
+
+```bash
+cc-gateway                    # Interactive dashboard (default)
+cc-gateway add [preset]       # Add provider (interactive or from preset)
+cc-gateway edit [id]          # Edit a provider
+cc-gateway remove [id]        # Remove a provider
+cc-gateway default [id]       # Set default provider
+```
+
+### Diagnostics
+
+```bash
+cc-gateway test [id]          # Test provider connections
+cc-gateway status             # Show provider status table
+```
+
+### Configuration
+
+```bash
+cc-gateway presets            # Browse all available presets
+cc-gateway presets --category chinese  # Filter by category
+cc-gateway config             # Show current config
+cc-gateway config --set port --value 8080
+cc-gateway import             # Import from cc-switch
+```
+
+### Shell Completions
+
+```bash
+# Bash
+cc-gateway completion bash > ~/.bash_completion.d/cc-gateway
+
+# Zsh
+cc-gateway completion zsh > ~/.zfunc/_cc-gateway
+
+# Fish
+cc-gateway completion fish > ~/.config/fish/completions/cc-gateway.fish
 ```
 
 ## Available Presets
 
-### Chinese Official
-`deepseek` `zhipu` `kimi` `kimi-coding` `bailian` `bailian-coding` `stepfun` `minimax` `doubao` `baidu-qianfan` `longcat`
+| Category | Presets |
+|----------|---------|
+| Chinese Official | `deepseek` `zhipu` `kimi` `kimi-coding` `bailian` `bailian-coding` `stepfun` `minimax` `doubao` `baidu-qianfan` `longcat` |
+| Aggregator | `siliconflow` `aihubmix` `dmxapi` `modelscope` |
+| Third Party | `openrouter` `together` `fireworks` |
+| Local | `ollama` `lmstudio` |
 
-### Aggregator
-`siliconflow` `aihubmix` `dmxapi` `modelscope`
+## How It Works
 
-### Third Party
-`openrouter` `together` `fireworks`
+```
+Claude Code  ->  POST /v1/messages  ->  cc-gateway (port 16789)
+                                           |
+                                     Route selection:
+                                       1. Session-based (x-claude-code-session-id header)
+                                       2. Model-based (claude-{id} in request)
+                                       3. Default provider (fallback)
+                                           |
+                                     Format conversion
+                                       Anthropic <-> OpenAI (automatic)
+                                           |
+                                     Forward to upstream provider
+                                           |
+                                     Stream response back to Claude Code
+```
 
-### Local
-`ollama` `lmstudio`
+- **Session routing**: Different terminals/projects can use different providers simultaneously
+- **Format conversion**: Automatic bidirectional conversion between Anthropic and OpenAI API formats
+- **SSE streaming**: Full streaming support with raw byte forwarding
+- **Settings auto-update**: `cc-gateway start` automatically configures `~/.claude/settings.json`
 
 ## Config File
+
+Location: `~/.cc-gateway/config.toml`
 
 ```toml
 port = 16789
@@ -106,18 +164,14 @@ model = "kimi-2.5"
 display_name = "Kimi 2.5"
 ```
 
-## Features
+## Files
 
-- **Multi-provider aggregation** — Configure multiple providers, switch via `/model`
-- **Interactive dashboard** — Default mode with arrow key navigation
-- **21+ presets** — Quick add from popular providers
-- **Import from cc-switch** — One-click migration
-- **Connection testing** — Test provider connectivity
-- **Usage tracking** — Token usage and cost monitoring
-- **Health monitoring** — Provider health status
-- **Format conversion** — Anthropic ↔ OpenAI automatic conversion
-- **SSE streaming** — Full streaming support
-- **Lightweight** — Single binary, no external dependencies
+| Path | Purpose |
+|------|---------|
+| `~/.cc-gateway/config.toml` | Provider configuration |
+| `~/.cc-gateway/cc-gateway.db` | SQLite database (usage, health) |
+| `~/.cc-gateway/cc-gateway.pid` | PID file (for start/stop) |
+| `~/.cc-gateway/cc-gateway.log` | Daemon log (when using `start -d`) |
 
 ## License
 

@@ -26,10 +26,10 @@ class CcGateway < Formula
 
   def install
     bin.install "cc-gateway"
-    
+
     # Generate shell completions
     generate_completions_from_executable(bin/"cc-gateway", "completion")
-    
+
     # Create config directory
     (etc/"cc-gateway").mkpath
   end
@@ -37,28 +37,28 @@ class CcGateway < Formula
   def caveats
     <<~EOS
       To get started with cc-gateway:
-      
-        # Launch interactive dashboard (default)
-        cc-gateway
-        
-        # Import from cc-switch (if you have it)
-        cc-gateway import
-        
-        # Or add providers from presets
+
+        # 1. Add providers from presets
         cc-gateway add mimo      # Xiaomi Mimo
         cc-gateway add kimi      # Moonshot Kimi
         cc-gateway add glm       # Zhipu GLM
         cc-gateway add qwen      # Alibaba Qwen
-        
-        # Start the proxy server
-        cc-gateway serve
-        
-        # Then configure Claude Code:
-        export ANTHROPIC_BASE_URL=http://127.0.0.1:16789
+
+        # 2. Start the server (background)
+        cc-gateway start -d
+
+        # 3. Use Claude Code
         claude
-      
-      Config file: ~/.cc-gateway/config.toml
-      Database: ~/.cc-gateway/cc-gateway.db
+        # In Claude Code: /model -> select provider
+
+      Manage the server:
+        cc-gateway start          # Start (foreground)
+        cc-gateway start -d       # Start (background)
+        cc-gateway stop           # Stop
+        cc-gateway restart -d     # Restart
+
+      Config: ~/.cc-gateway/config.toml
+      Log:    ~/.cc-gateway/cc-gateway.log
     EOS
   end
 

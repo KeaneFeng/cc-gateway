@@ -24,6 +24,9 @@ pub enum ProxyError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -59,6 +62,11 @@ impl IntoResponse for ProxyError {
             ProxyError::ConfigError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "config_error",
+                self.to_string(),
+            ),
+            ProxyError::BadRequest(_) => (
+                StatusCode::BAD_REQUEST,
+                "bad_request",
                 self.to_string(),
             ),
             ProxyError::Internal(_) => (

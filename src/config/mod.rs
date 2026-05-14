@@ -1,7 +1,7 @@
 pub mod presets;
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// API format for provider communication
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,8 +40,11 @@ pub struct ProviderConfig {
     pub base_url: String,
     /// API key
     pub api_key: String,
-    /// Model ID to use when forwarding to this provider
+    /// Model ID for text requests
     pub model: String,
+    /// Model ID for image/vision requests (optional, falls back to model)
+    #[serde(default)]
+    pub vision_model: Option<String>,
     /// Display name for the model (shown in /model picker)
     #[serde(default)]
     pub display_name: Option<String>,
@@ -54,6 +57,11 @@ pub struct ProviderConfig {
     /// Notes (e.g., actual model name, description)
     #[serde(default)]
     pub notes: Option<String>,
+    /// Effort level override for this provider (low, medium, high, max)
+    /// When set, overrides output_config.effort in requests sent to this provider.
+    /// Useful for providers that don't support newer effort values like "xhigh".
+    #[serde(default)]
+    pub effort_level: Option<String>,
 }
 
 /// Application configuration
@@ -70,6 +78,12 @@ pub struct AppConfig {
     /// Log level
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Project directories to scan for Claude Code projects
+    #[serde(default)]
+    pub project_dirs: Vec<String>,
+    /// Project-specific provider mappings: path -> provider_id
+    #[serde(default)]
+    pub project_providers: std::collections::HashMap<String, String>,
 }
 
 fn default_port() -> u16 {
@@ -91,15 +105,40 @@ impl Default for AppConfig {
             host: default_host(),
             providers: Vec::new(),
             log_level: default_log_level(),
+            project_dirs: Vec::new(),
+            project_providers: std::collections::HashMap::new(),
         }
     }
 }
 
 impl AppConfig {
     /// Load config from file
-    pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config: AppConfig = toml::from_str(&content)?;
+        let mut config: AppConfig = toml::from_str(&content)?;
+
+        // Validate: only one default provider allowed
+        let default_count = config.providers.iter().filter(|p| p.is_default).count();
+        if default_count > 1 {
+            // Keep only the first default, unset others
+            let mut found_default = false;
+            for p in &mut config.providers {
+                if p.is_default {
+                    if found_default {
+                        p.is_default = false;
+                    } else {
+                        found_default = true;
+                    }
+                }
+            }
+            // Save the fixed config
+            config.save(path)?;
+        } else if default_count == 0 && !config.providers.is_empty() {
+            // No default set, make the first one default
+            config.providers[0].is_default = true;
+            config.save(path)?;
+        }
+
         Ok(config)
     }
 
@@ -215,6 +254,9 @@ impl AppConfig {
         if let Some(model) = updates.model {
             provider.model = model;
         }
+        if let Some(vision_model) = updates.vision_model {
+            provider.vision_model = vision_model;
+        }
         if let Some(display_name) = updates.display_name {
             provider.display_name = Some(display_name);
         }
@@ -223,6 +265,9 @@ impl AppConfig {
         }
         if let Some(notes) = updates.notes {
             provider.notes = Some(notes);
+        }
+        if let Some(effort_level) = updates.effort_level {
+            provider.effort_level = effort_level;
         }
 
         // If no default exists, set the first one
@@ -283,9 +328,11 @@ pub struct ProviderUpdate {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub model: Option<String>,
+    pub vision_model: Option<Option<String>>,
     pub display_name: Option<String>,
     pub is_default: Option<bool>,
     pub notes: Option<String>,
+    pub effort_level: Option<Option<String>>,
 }
 
 /// Import from cc-switch database (legacy, use database module instead)
@@ -303,8 +350,11 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
     let conn = rusqlite::Connection::open(&cc_switch_db)?;
 
     // Query providers - cc-switch uses app_type = 'claude' for Claude providers
+    // name = provider name (e.g. "Xiaomi MiMo", "DeepSeek")
+    // notes = model name or custom note (e.g. "deepseek-v4-pro", "QQ")
+    // meta = JSON with apiFormat field (e.g. "anthropic", "openai_chat")
     let mut stmt = conn.prepare(
-        "SELECT id, name, settings_config, notes FROM providers WHERE app_type = 'claude'"
+        "SELECT id, name, settings_config, notes, meta FROM providers WHERE app_type = 'claude'",
     )?;
 
     let providers: Vec<ProviderConfig> = stmt
@@ -313,6 +363,25 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
             let name: String = row.get(1)?;
             let settings_config_str: String = row.get(2)?;
             let notes: Option<String> = row.get(3)?;
+            let meta_str: Option<String> = row.get(4)?;
+
+            // Parse meta JSON to get apiFormat
+            let meta: serde_json::Value = meta_str
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(serde_json::json!({}));
+
+            let api_format_str = meta
+                .get("apiFormat")
+                .and_then(|v| v.as_str())
+                .unwrap_or("anthropic");
+
+            let api_format = match api_format_str {
+                "openai_chat" => ApiFormat::OpenAiChat,
+                "openai_responses" => ApiFormat::OpenAiResponses,
+                "gemini_native" => ApiFormat::GeminiNative,
+                _ => ApiFormat::Anthropic,
+            };
 
             // Parse settings_config JSON
             let settings_config: serde_json::Value = serde_json::from_str(&settings_config_str)
@@ -332,7 +401,8 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
                 .unwrap_or("")
                 .to_string();
 
-            let model = env.get("ANTHROPIC_MODEL")
+            let model = env
+                .get("ANTHROPIC_MODEL")
                 .and_then(|v| v.as_str())
                 .unwrap_or("claude-sonnet-4")
                 .to_string();
@@ -342,17 +412,20 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
                 return Ok(None);
             }
 
+            // Use name as display_name, notes stays as notes
             Ok(Some(ProviderConfig {
                 id: id.clone(),
-                name,
-                api_format: ApiFormat::OpenAiChat,
+                name: name.clone(),
+                api_format,
                 base_url,
                 api_key,
                 model,
-                display_name: None,
+                vision_model: None,
+                display_name: Some(name),
                 is_default: false,
                 preset_id: None,
                 notes,
+                effort_level: None,
             }))
         })?
         .filter_map(|r| r.transpose())
@@ -387,10 +460,12 @@ pub fn generate_example_config() -> AppConfig {
                 base_url: "https://api.mimo.xiaomi.com/v1".to_string(),
                 api_key: "sk-xxx".to_string(),
                 model: "mimo-2.5-pro".to_string(),
+                vision_model: None,
                 display_name: Some("Mimo 2.5 Pro".to_string()),
                 is_default: true,
                 preset_id: None,
                 notes: None,
+                effort_level: None,
             },
             ProviderConfig {
                 id: "kimi".to_string(),
@@ -399,10 +474,12 @@ pub fn generate_example_config() -> AppConfig {
                 base_url: "https://api.moonshot.cn/v1".to_string(),
                 api_key: "sk-xxx".to_string(),
                 model: "kimi-2.5".to_string(),
+                vision_model: None,
                 display_name: Some("Kimi 2.5".to_string()),
                 is_default: false,
                 preset_id: None,
                 notes: None,
+                effort_level: None,
             },
             ProviderConfig {
                 id: "glm".to_string(),
@@ -411,10 +488,12 @@ pub fn generate_example_config() -> AppConfig {
                 base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
                 api_key: "xxx".to_string(),
                 model: "glm-5.1".to_string(),
+                vision_model: None,
                 display_name: Some("GLM 5.1".to_string()),
                 is_default: false,
                 preset_id: None,
                 notes: None,
+                effort_level: None,
             },
             ProviderConfig {
                 id: "qwen".to_string(),
@@ -423,11 +502,15 @@ pub fn generate_example_config() -> AppConfig {
                 base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
                 api_key: "sk-xxx".to_string(),
                 model: "qwen2.5-plus".to_string(),
+                vision_model: None,
                 display_name: Some("Qwen 2.5 Plus".to_string()),
                 is_default: false,
                 preset_id: None,
                 notes: None,
+                effort_level: None,
             },
         ],
+        project_dirs: Vec::new(),
+        project_providers: std::collections::HashMap::new(),
     }
 }

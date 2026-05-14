@@ -496,6 +496,38 @@ impl Database {
         Ok(summary)
     }
 
+    /// Get usage statistics grouped by provider
+    pub fn get_usage_by_provider(&self, app_type: &str, days: i32) -> anyhow::Result<Vec<ProviderUsage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT 
+                provider_id,
+                COUNT(*) as total_requests,
+                SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) as total_success,
+                COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0) as total_cost,
+                CAST(COALESCE(AVG(latency_ms), 0) AS INTEGER) as avg_latency
+             FROM proxy_request_logs 
+             WHERE app_type = ?1 AND created_at >= strftime('%s', 'now', '-' || ?2 || ' days')
+             GROUP BY provider_id
+             ORDER BY total_requests DESC"
+        )?;
+
+        let stats = stmt.query_map(params![app_type, days], |row| {
+            Ok(ProviderUsage {
+                provider_id: row.get(0)?,
+                total_requests: row.get(1)?,
+                total_success: row.get(2)?,
+                total_input_tokens: row.get(3)?,
+                total_output_tokens: row.get(4)?,
+                total_cost_usd: row.get(5)?,
+                avg_latency_ms: row.get(6)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(stats)
+    }
+
     // =========================================================================
     // Stream check logs
     // =========================================================================
@@ -688,6 +720,18 @@ pub struct StreamCheckLog {
 /// Usage summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageSummary {
+    pub total_requests: i64,
+    pub total_success: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cost_usd: f64,
+    pub avg_latency_ms: i64,
+}
+
+/// Usage statistics grouped by provider
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderUsage {
+    pub provider_id: String,
     pub total_requests: i64,
     pub total_success: i64,
     pub total_input_tokens: i64,

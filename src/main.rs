@@ -3,11 +3,12 @@ mod config;
 mod database;
 mod error;
 mod interactive;
+mod mouse_tui;
 mod provider;
 mod proxy;
 
 use axum::{
-    routing::{get, post},
+    routing::{get, post, delete},
     Router,
 };
 use clap::{Parser, Subcommand, CommandFactory};
@@ -26,7 +27,46 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the proxy server (foreground)
+    /// Start the server (foreground by default, --daemon for background)
+    Start {
+        /// Config file path
+        #[arg(short, long, default_value = "~/.cc-gateway/config.toml")]
+        config: String,
+        /// Server port (overrides config)
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Server host (overrides config)
+        #[arg(long)]
+        host: Option<String>,
+        /// Run in background
+        #[arg(short, long)]
+        daemon: bool,
+        /// Force: stop existing server before starting
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Stop the running server
+    Stop,
+
+    /// Restart the server (stop + start)
+    Restart {
+        /// Config file path
+        #[arg(short, long, default_value = "~/.cc-gateway/config.toml")]
+        config: String,
+        /// Server port (overrides config)
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Server host (overrides config)
+        #[arg(long)]
+        host: Option<String>,
+        /// Run in background
+        #[arg(short, long)]
+        daemon: bool,
+    },
+
+    /// Internal: run the proxy server directly (used by start/restart)
+    #[command(hide = true)]
     Serve {
         /// Config file path
         #[arg(short, long, default_value = "~/.cc-gateway/config.toml")]
@@ -139,6 +179,15 @@ async fn main() -> anyhow::Result<()> {
             interactive::run_dashboard(&expand_path("~/.cc-gateway/config.toml"))?;
         }
         Some(cmd) => match cmd {
+            Commands::Start { config, port, host, daemon, force } => {
+                commands::serve::run_start(&expand_path(&config), port, host, daemon, force)?;
+            }
+            Commands::Stop => {
+                commands::serve::run_stop()?;
+            }
+            Commands::Restart { config, port, host, daemon } => {
+                commands::serve::run_restart(&expand_path(&config), port, host, daemon)?;
+            }
             Commands::Serve { config, port, host } => {
                 serve(config, port, host).await?;
             }
@@ -204,24 +253,84 @@ async fn serve(config_path: String, port: Option<u16>, host: Option<String>) -> 
         config.host = host;
     }
 
+    // Update ~/.claude/settings.json to point to cc-gateway
+    update_global_claude_settings(config.port)?;
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level)))
         .init();
 
     tracing::info!("Starting cc-gateway on {}:{}", config.host, config.port);
 
-    let state = proxy::handlers::AppState::new(config.clone())?;
+    let state = proxy::handlers::AppState::new(config.clone(), config_path.to_string_lossy().to_string())?;
     let app = Router::new()
         .route("/v1/models", get(proxy::handlers::list_models))
         .route("/v1/messages", post(proxy::handlers::handle_messages))
         .route("/health", get(proxy::handlers::health_check))
         .route("/status", get(proxy::handlers::get_status))
+        // Per-provider routing: /provider/:provider_id/v1/messages
+        .route("/provider/:provider_id/v1/messages", post(proxy::handlers::handle_messages_for_provider))
+        .route("/provider/:provider_id/v1/models", get(proxy::handlers::list_models_for_provider))
+        // Provider switching API (runtime, no restart needed)
+        .route("/api/switch-provider", post(proxy::handlers::switch_provider))
+        .route("/api/current-provider", get(proxy::handlers::get_current_provider))
+        .route("/api/reload", post(proxy::handlers::reload_config))
         .with_state(state);
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Listening on {}", addr);
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Update ~/.claude/settings.json to point to cc-gateway
+fn update_global_claude_settings(port: u16) -> anyhow::Result<()> {
+    let settings_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".claude")
+        .join("settings.json");
+
+    if !settings_path.exists() {
+        // Create minimal settings file
+        let settings = serde_json::json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{}", port),
+                "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED"
+            }
+        });
+        std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        tracing::info!("Created ~/.claude/settings.json with cc-gateway proxy");
+        return Ok(());
+    }
+
+    // Read existing settings
+    let content = std::fs::read_to_string(&settings_path)?;
+    let mut settings: serde_json::Value = serde_json::from_str(&content)?;
+
+    // Update ANTHROPIC_BASE_URL
+    let base_url = format!("http://127.0.0.1:{}", port);
+
+    if settings.get("env").is_none() {
+        settings["env"] = serde_json::json!({});
+    }
+
+    if let Some(env) = settings.get_mut("env") {
+        if let Some(obj) = env.as_object_mut() {
+            obj.insert(
+                "ANTHROPIC_BASE_URL".to_string(),
+                serde_json::json!(base_url),
+            );
+            obj.insert(
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                serde_json::json!("PROXY_MANAGED"),
+            );
+        }
+    }
+
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    tracing::info!("Updated ~/.claude/settings.json → {}", base_url);
+
     Ok(())
 }
 
