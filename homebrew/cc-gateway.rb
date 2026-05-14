@@ -9,8 +9,10 @@ class CcGateway < Formula
       url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.3.0/cc-gateway-aarch64-apple-darwin.tar.gz"
       sha256 "PLACEHOLDER_SHA256_ARM64"
     else
-      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.3.0/cc-gateway-x86_64-apple-darwin.tar.gz"
-      sha256 "PLACEHOLDER_SHA256_X86_64"
+      depends_on "rust" => :build
+      install do
+        system "cargo", "install", "--path", "."
+      end
     end
   end
 
@@ -25,12 +27,12 @@ class CcGateway < Formula
   end
 
   def install
-    bin.install "cc-gateway"
-
-    # Generate shell completions
-    generate_completions_from_executable(bin/"cc-gateway", "completion")
-
-    # Create config directory
+    if Hardware::CPU.arm? && OS.mac?
+      bin.install "cc-gateway"
+      generate_completions_from_executable(bin/"cc-gateway", "completion")
+    else
+      generate_completions_from_executable(bin/"cc-gateway", "completion") if File.exist?(bin/"cc-gateway")
+    end
     (etc/"cc-gateway").mkpath
   end
 
