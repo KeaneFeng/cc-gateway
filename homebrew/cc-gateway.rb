@@ -7,7 +7,7 @@ class CcGateway < Formula
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.3.0/cc-gateway-aarch64-apple-darwin.tar.gz"
-      sha256 "PLACEHOLDER_SHA256_ARM64"
+      sha256 "dfe6c1d6df37ba575d7d19784a36aabd6d09a5ec3430ffaba51b1fe98b09e84c"
     else
       depends_on "rust" => :build
       install do
@@ -19,10 +19,10 @@ class CcGateway < Formula
   on_linux do
     if Hardware::CPU.arm?
       url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.3.0/cc-gateway-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "PLACEHOLDER_SHA256_LINUX_ARM64"
+      sha256 "eb346916f93f89a695b463c7c779df25211749783510f9eb8d93d72bed07ee8f"
     else
       url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.3.0/cc-gateway-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "PLACEHOLDER_SHA256_LINUX_X86_64"
+      sha256 "a2dd3d9114c1cfa5fea277a5f99473cb7f12cc1a4588b025cecaa50d64bf5782"
     end
   end
 
