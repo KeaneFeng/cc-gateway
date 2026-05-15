@@ -3,6 +3,3 @@
 *.swo
 *~
 .DS_Store
-.claude/
-.clawhub/
-CLAUDE.md
