@@ -20,9 +20,9 @@ impl Provider {
             .no_gzip()
             .no_brotli()
             .no_deflate()
-            // Timeouts: 30s connect, 300s total (matches cc-switch pattern)
+            // Timeouts: 30s connect, 600s total (matches cc-switch pattern)
             .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(300))
+            .timeout(std::time::Duration::from_secs(600))
             .build()?;
 
         Ok(Self { config, client })

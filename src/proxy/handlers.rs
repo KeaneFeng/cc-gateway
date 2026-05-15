@@ -639,26 +639,38 @@ pub async fn get_status(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-/// Check if request body contains image content
+/// Check if request body contains image content (recursive for nested tool_result)
 fn check_has_image(body: &Value) -> bool {
     // Check messages array for image content
     if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
         for message in messages {
-            if let Some(content) = message.get("content") {
-                // Content can be a string or an array
-                if let Some(content_array) = content.as_array() {
-                    for item in content_array {
-                        if let Some(content_type) = item.get("type").and_then(|t| t.as_str()) {
-                            if content_type == "image" || content_type == "image_url" {
-                                return true;
-                            }
-                        }
-                    }
-                }
+            if has_image_in_content(message.get("content")) {
+                return true;
             }
         }
     }
     false
+}
+
+/// Recursively check if a content value contains image (handles nested tool_result)
+fn has_image_in_content(content: Option<&Value>) -> bool {
+    match content {
+        Some(Value::Array(arr)) => {
+            for item in arr {
+                if let Some(content_type) = item.get("type").and_then(|t| t.as_str()) {
+                    if content_type == "image" || content_type == "image_url" {
+                        return true;
+                    }
+                }
+                // Check nested content (e.g., tool_result with image content)
+                if has_image_in_content(item.get("content")) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 /// GET /provider/{provider_id}/v1/models - List models for a specific provider

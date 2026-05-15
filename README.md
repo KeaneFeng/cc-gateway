@@ -147,7 +147,7 @@ log_level = "info"
 [[providers]]
 id = "mimo"
 name = "Xiaomi MiMo"
-api_type = "openai"
+api_type = "anthropic"
 base_url = "https://api.mimo.xiaomi.com/v1"
 api_key = "sk-xxx"
 model = "mimo-2.5-pro"
@@ -157,7 +157,7 @@ is_default = true
 [[providers]]
 id = "kimi"
 name = "Moonshot Kimi"
-api_type = "openai"
+api_type = "anthropic"
 base_url = "https://api.moonshot.cn/v1"
 api_key = "sk-xxx"
 model = "kimi-2.5"
