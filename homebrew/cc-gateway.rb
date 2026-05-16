@@ -1,13 +1,13 @@
 class CcGateway < Formula
   desc "Multi-provider aggregation gateway for Claude Code"
   homepage "https://github.com/KeaneFeng/cc-gateway"
-  version "0.4.0"
+  version "0.4.6"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.0/cc-gateway-aarch64-apple-darwin.tar.gz"
-      sha256 "75eebcf12d72c7c4f88cb813beed4f5f4d2daab8a2639b7a42ecaef58241b077"
+      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.6/cc-gateway-aarch64-apple-darwin.tar.gz"
+      sha256 "2c98851a62292bb9a4cb13150d9d1c3bc1bd4f325cec8ac4e0ff5b567ffed92f"
     else
       depends_on "rust" => :build
       install do
@@ -18,10 +18,10 @@ class CcGateway < Formula
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.0/cc-gateway-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.6/cc-gateway-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "PLACEHOLDER_SHA256"
     else
-      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.0/cc-gateway-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.6/cc-gateway-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "PLACEHOLDER_SHA256"
     end
   end
