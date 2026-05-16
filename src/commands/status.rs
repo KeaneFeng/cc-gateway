@@ -12,10 +12,7 @@ pub fn show_status(config_path: &str) -> anyhow::Result<()> {
         AppConfig::default()
     };
 
-    println!(
-        "\n  {} Provider Status\n",
-        style("📊").cyan()
-    );
+    println!("\n  {} Provider Status\n", style("📊").cyan());
 
     if config.providers.is_empty() {
         println!("  {} No providers configured.\n", style("⚠").yellow());

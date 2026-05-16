@@ -12,18 +12,12 @@ pub fn show_config(config_path: &str) -> anyhow::Result<()> {
         AppConfig::default()
     };
 
-    println!(
-        "\n  {} Configuration\n",
-        style("⚙️").cyan()
-    );
+    println!("\n  {} Configuration\n", style("⚙️").cyan());
     println!("  Config: {}", style(path.display()).dim());
     println!("  Port:   {}", style(config.port).green());
     println!("  Host:   {}", style(&config.host).green());
     println!("  Log:    {}", style(&config.log_level).green());
-    println!(
-        "  Providers: {}",
-        style(config.providers.len()).cyan()
-    );
+    println!("  Providers: {}", style(config.providers.len()).cyan());
     println!();
 
     Ok(())
@@ -39,7 +33,9 @@ pub fn set_config(config_path: &str, key: &str, value: &str) -> anyhow::Result<(
 
     match key {
         "port" => {
-            config.port = value.parse().map_err(|_| anyhow::anyhow!("Invalid port number"))?;
+            config.port = value
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid port number"))?;
         }
         "host" => {
             config.host = value.to_string();
@@ -48,7 +44,10 @@ pub fn set_config(config_path: &str, key: &str, value: &str) -> anyhow::Result<(
             config.log_level = value.to_string();
         }
         _ => {
-            anyhow::bail!("Unknown config key: {}. Valid keys: port, host, log_level", key);
+            anyhow::bail!(
+                "Unknown config key: {}. Valid keys: port, host, log_level",
+                key
+            );
         }
     }
 

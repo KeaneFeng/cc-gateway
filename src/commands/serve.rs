@@ -11,9 +11,9 @@ const LOG_FILE: &str = "~/.cc-gateway/cc-gateway.log";
 const DEFAULT_PORT: u16 = 16789;
 
 fn expand_path(path: &str) -> PathBuf {
-    if path.starts_with("~/") {
+    if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            return home.join(&path[2..]);
+            return home.join(stripped);
         }
     }
     PathBuf::from(path)
@@ -118,7 +118,13 @@ fn kill_process(pid: u32, label: &str) -> Result<()> {
 /// In foreground mode (default): writes PID file, then `exec`s into `cc-gateway serve`.
 /// In daemon mode (`--daemon`): spawns `cc-gateway serve` in background, writes child PID.
 /// If `force` is true, stops any existing server before starting.
-pub fn run_start(config: &str, port: Option<u16>, host: Option<String>, daemon: bool, force: bool) -> Result<()> {
+pub fn run_start(
+    config: &str,
+    port: Option<u16>,
+    host: Option<String>,
+    daemon: bool,
+    force: bool,
+) -> Result<()> {
     let effective_port = port.unwrap_or(DEFAULT_PORT);
 
     if force {
@@ -163,8 +169,7 @@ pub fn run_start(config: &str, port: Option<u16>, host: Option<String>, daemon: 
         args.push(h);
     }
 
-    let exe = std::env::current_exe()
-        .context("Failed to get current executable path")?;
+    let exe = std::env::current_exe().context("Failed to get current executable path")?;
 
     if daemon {
         let log_path = log_file_path();
@@ -207,7 +212,10 @@ pub fn run_start(config: &str, port: Option<u16>, host: Option<String>, daemon: 
                 if start.elapsed() > Duration::from_secs(5) {
                     remove_pid_file();
                     let _ = kill_process(child.id(), "cc-gateway");
-                    anyhow::bail!("cc-gateway timed out starting (5s). Check log: {}", log_path.display());
+                    anyhow::bail!(
+                        "cc-gateway timed out starting (5s). Check log: {}",
+                        log_path.display()
+                    );
                 }
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
@@ -216,7 +224,11 @@ pub fn run_start(config: &str, port: Option<u16>, host: Option<String>, daemon: 
             break;
         }
 
-        println!("cc-gateway started (PID: {}, port: {})", child.id(), effective_port);
+        println!(
+            "cc-gateway started (PID: {}, port: {})",
+            child.id(),
+            effective_port
+        );
         println!("  Log: {}", log_path.display());
         println!("  Stop: cc-gateway stop");
         Ok(())
@@ -234,11 +246,24 @@ pub fn run_stop() -> Result<()> {
     let pid = match read_pid()? {
         Some(pid) => pid,
         None => {
+            // No PID file — try to find process by port
             println!("cc-gateway is not running (no PID file)");
             if is_port_in_use(DEFAULT_PORT) {
-                println!("  Note: port {} is still in use by another process", DEFAULT_PORT);
-                println!("  If it's a leftover cc-gateway, kill it manually:");
-                println!("    ps aux | grep 'cc-gateway serve' | grep -v grep");
+                println!(
+                    "  Port {} is in use, trying to find process...",
+                    DEFAULT_PORT
+                );
+                if let Some(pid) = find_pid_by_port(DEFAULT_PORT) {
+                    println!("  Found cc-gateway on port {} (PID: {})", DEFAULT_PORT, pid);
+                    kill_process(pid, "cc-gateway")?;
+                    println!("cc-gateway stopped");
+                } else {
+                    println!(
+                        "  Could not find cc-gateway process on port {}",
+                        DEFAULT_PORT
+                    );
+                    println!("  Kill manually: lsof -i :{} -t | xargs kill", DEFAULT_PORT);
+                }
             }
             return Ok(());
         }
@@ -257,8 +282,24 @@ pub fn run_stop() -> Result<()> {
     Ok(())
 }
 
+/// Find PID of cc-gateway server process on a given port using lsof
+/// Only matches LISTEN state (server), not connected clients (Claude Code)
+fn find_pid_by_port(port: u16) -> Option<u32> {
+    let output = std::process::Command::new("lsof")
+        .args(["-i", &format!(":{}", port), "-sTCP:LISTEN", "-t"])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.trim().lines().next()?.trim().parse::<u32>().ok()
+}
+
 /// Restart: stop + start.
-pub fn run_restart(config: &str, port: Option<u16>, host: Option<String>, daemon: bool) -> Result<()> {
+pub fn run_restart(
+    config: &str,
+    port: Option<u16>,
+    host: Option<String>,
+    daemon: bool,
+) -> Result<()> {
     let effective_port = port.unwrap_or(DEFAULT_PORT);
 
     // Always do a full stop — handles PID file, stale files, and orphan processes
@@ -266,15 +307,18 @@ pub fn run_restart(config: &str, port: Option<u16>, host: Option<String>, daemon
     if was_running || is_port_in_use(effective_port) {
         println!("Restarting cc-gateway...");
         run_stop()?;
-        // Wait for port to be released
-        for _ in 0..30 {
+        // Wait for port to be released (up to 5 seconds)
+        for _ in 0..50 {
             if !is_port_in_use(effective_port) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
         if is_port_in_use(effective_port) {
-            anyhow::bail!("Port {} is still in use after stopping. Please check manually.", effective_port);
+            anyhow::bail!(
+                "Port {} is still in use after stopping. Please check manually.",
+                effective_port
+            );
         }
     }
 
@@ -282,6 +326,7 @@ pub fn run_restart(config: &str, port: Option<u16>, host: Option<String>, daemon
 }
 
 /// Show whether the server is running.
+#[allow(dead_code)]
 pub fn run_server_status() -> Result<()> {
     match check_running()? {
         Some(pid) => {

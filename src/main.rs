@@ -1,23 +1,43 @@
+mod balance;
 mod commands;
 mod config;
 mod database;
 mod error;
 mod interactive;
-mod mouse_tui;
 mod provider;
 mod proxy;
 
 use axum::{
-    routing::{get, post, delete},
+    extract::DefaultBodyLimit,
+    routing::{get, post},
     Router,
 };
-use clap::{Parser, Subcommand, CommandFactory};
+use clap::{CommandFactory, Parser, Subcommand};
+use std::sync::{Arc, OnceLock};
 use tracing_subscriber::EnvFilter;
+
+/// Reloadable log filter handle for dynamic log level changes without restart.
+/// Stored as a global static, initialized once in `serve()`.
+static LOG_FILTER_HANDLE: OnceLock<
+    Arc<tracing_subscriber::reload::Handle<EnvFilter, tracing_subscriber::Registry>>,
+> = OnceLock::new();
+
+/// Update the log level at runtime. Called from TUI toggle and /api/reload.
+pub fn set_log_level(level: &str) {
+    if let Some(handle) = LOG_FILTER_HANDLE.get() {
+        let filter = EnvFilter::new(level);
+        if let Err(e) = handle.modify(|f| *f = filter) {
+            tracing::warn!("Failed to update log level: {}", e);
+        } else {
+            tracing::info!("Log level changed to: {}", level);
+        }
+    }
+}
 
 /// cc-gateway: Multi-provider aggregation gateway for Claude Code
 #[derive(Parser)]
 #[command(name = "cc-gateway")]
-#[command(version = "0.3.0")]
+#[command(version)]
 #[command(about = "Multi-provider aggregation gateway for Claude Code", long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
@@ -179,13 +199,24 @@ async fn main() -> anyhow::Result<()> {
             interactive::run_dashboard(&expand_path("~/.cc-gateway/config.toml"))?;
         }
         Some(cmd) => match cmd {
-            Commands::Start { config, port, host, daemon, force } => {
+            Commands::Start {
+                config,
+                port,
+                host,
+                daemon,
+                force,
+            } => {
                 commands::serve::run_start(&expand_path(&config), port, host, daemon, force)?;
             }
             Commands::Stop => {
                 commands::serve::run_stop()?;
             }
-            Commands::Restart { config, port, host, daemon } => {
+            Commands::Restart {
+                config,
+                port,
+                host,
+                daemon,
+            } => {
                 commands::serve::run_restart(&expand_path(&config), port, host, daemon)?;
             }
             Commands::Serve { config, port, host } => {
@@ -205,7 +236,8 @@ async fn main() -> anyhow::Result<()> {
             }
             Commands::Default { id, config } => {
                 let path = std::path::PathBuf::from(expand_path(&config));
-                interactive::set_default(&path, id.as_deref())?;
+                let cfg = crate::config::AppConfig::load(&path).unwrap_or_default();
+                interactive::set_default(&path, id.as_deref(), cfg.port)?;
             }
             Commands::Test { id, config } => {
                 commands::test::run_test(&expand_path(&config), id.as_deref()).await?;
@@ -256,25 +288,49 @@ async fn serve(config_path: String, port: Option<u16>, host: Option<String>) -> 
     // Update ~/.claude/settings.json to point to cc-gateway
     update_global_claude_settings(config.port)?;
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level)))
+    // Use reloadable filter so log level can be changed at runtime without restart
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let (filter_layer, filter_handle) = tracing_subscriber::reload::Layer::new(filter);
+    LOG_FILTER_HANDLE.set(Arc::new(filter_handle)).ok();
+
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(tracing_subscriber::fmt::layer())
         .init();
 
     tracing::info!("Starting cc-gateway on {}:{}", config.host, config.port);
 
-    let state = proxy::handlers::AppState::new(config.clone(), config_path.to_string_lossy().to_string())?;
+    let state =
+        proxy::handlers::AppState::new(config.clone(), config_path.to_string_lossy().to_string())?;
     let app = Router::new()
         .route("/v1/models", get(proxy::handlers::list_models))
         .route("/v1/messages", post(proxy::handlers::handle_messages))
         .route("/health", get(proxy::handlers::health_check))
         .route("/status", get(proxy::handlers::get_status))
         // Per-provider routing: /provider/:provider_id/v1/messages
-        .route("/provider/:provider_id/v1/messages", post(proxy::handlers::handle_messages_for_provider))
-        .route("/provider/:provider_id/v1/models", get(proxy::handlers::list_models_for_provider))
+        .route(
+            "/provider/:provider_id/v1/messages",
+            post(proxy::handlers::handle_messages_for_provider),
+        )
+        .route(
+            "/provider/:provider_id/v1/models",
+            get(proxy::handlers::list_models_for_provider),
+        )
         // Provider switching API (runtime, no restart needed)
-        .route("/api/switch-provider", post(proxy::handlers::switch_provider))
-        .route("/api/current-provider", get(proxy::handlers::get_current_provider))
+        .route(
+            "/api/switch-provider",
+            post(proxy::handlers::switch_provider),
+        )
+        .route(
+            "/api/current-provider",
+            get(proxy::handlers::get_current_provider),
+        )
         .route("/api/reload", post(proxy::handlers::reload_config))
+        // Increase body size limit to 200MB (matching cc-switch)
+        // Large Claude Code sessions can exceed default 2MB limit
+        .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
         .with_state(state);
 
     let addr = format!("{}:{}", config.host, config.port);
@@ -335,9 +391,9 @@ fn update_global_claude_settings(port: u16) -> anyhow::Result<()> {
 }
 
 fn expand_path(path: &str) -> String {
-    if path.starts_with("~/") {
+    if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            return home.join(&path[2..]).to_string_lossy().to_string();
+            return home.join(stripped).to_string_lossy().to_string();
         }
     }
     path.to_string()

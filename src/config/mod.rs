@@ -4,13 +4,14 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// API format for provider communication
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum ApiFormat {
     /// Anthropic Messages API - direct passthrough
     #[serde(rename = "anthropic")]
     Anthropic,
     /// OpenAI Chat Completions - needs format conversion
     #[serde(rename = "openai_chat")]
+    #[default]
     OpenAiChat,
     /// OpenAI Responses API - needs format conversion
     #[serde(rename = "openai_responses")]
@@ -18,12 +19,6 @@ pub enum ApiFormat {
     /// Gemini Native generateContent - needs format conversion
     #[serde(rename = "gemini_native")]
     GeminiNative,
-}
-
-impl Default for ApiFormat {
-    fn default() -> Self {
-        ApiFormat::OpenAiChat
-    }
 }
 
 /// Provider configuration
@@ -153,6 +148,7 @@ impl AppConfig {
     }
 
     /// Get default config path
+    #[allow(dead_code)]
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -166,6 +162,7 @@ impl AppConfig {
     }
 
     /// Get provider by model ID (claude-xxx format)
+    #[allow(dead_code)]
     pub fn get_provider_by_model(&self, model_id: &str) -> Option<&ProviderConfig> {
         self.providers.iter().find(|p| {
             let full_id = format!("claude-{}", p.id);
@@ -174,11 +171,16 @@ impl AppConfig {
     }
 
     /// Get default provider
+    #[allow(dead_code)]
     pub fn get_default_provider(&self) -> Option<&ProviderConfig> {
-        self.providers.iter().find(|p| p.is_default).or_else(|| self.providers.first())
+        self.providers
+            .iter()
+            .find(|p| p.is_default)
+            .or_else(|| self.providers.first())
     }
 
     /// Get all model IDs for the /v1/models endpoint
+    #[allow(dead_code)]
     pub fn get_model_ids(&self) -> Vec<String> {
         self.providers
             .iter()
@@ -201,7 +203,10 @@ impl AppConfig {
 
         // If this is the first provider, make it default
         let provider = if self.providers.is_empty() {
-            ProviderConfig { is_default: true, ..provider }
+            ProviderConfig {
+                is_default: true,
+                ..provider
+            }
         } else {
             provider
         };
@@ -232,14 +237,17 @@ impl AppConfig {
     /// Update a provider
     pub fn update_provider(&mut self, id: &str, updates: ProviderUpdate) -> anyhow::Result<()> {
         let needs_unset_defaults = updates.is_default == Some(true);
-        
+
         if needs_unset_defaults {
             for p in &mut self.providers {
                 p.is_default = false;
             }
         }
 
-        let provider = self.providers.iter_mut().find(|p| p.id == id)
+        let provider = self
+            .providers
+            .iter_mut()
+            .find(|p| p.id == id)
             .ok_or_else(|| anyhow::anyhow!("Provider with ID '{}' not found", id))?;
 
         if let Some(name) = updates.name {
@@ -282,7 +290,10 @@ impl AppConfig {
 
     /// Copy a provider
     pub fn copy_provider(&mut self, source_id: &str, new_id: &str) -> anyhow::Result<()> {
-        let source = self.providers.iter().find(|p| p.id == source_id)
+        let source = self
+            .providers
+            .iter()
+            .find(|p| p.id == source_id)
             .ok_or_else(|| anyhow::anyhow!("Provider with ID '{}' not found", source_id))?
             .clone();
 
@@ -343,7 +354,10 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
         .join("cc-switch.db");
 
     if !cc_switch_db.exists() {
-        anyhow::bail!("cc-switch database not found at: {}", cc_switch_db.display());
+        anyhow::bail!(
+            "cc-switch database not found at: {}",
+            cc_switch_db.display()
+        );
     }
 
     // Open SQLite database
@@ -384,18 +398,20 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
             };
 
             // Parse settings_config JSON
-            let settings_config: serde_json::Value = serde_json::from_str(&settings_config_str)
-                .unwrap_or(serde_json::json!({}));
+            let settings_config: serde_json::Value =
+                serde_json::from_str(&settings_config_str).unwrap_or(serde_json::json!({}));
 
             let default_env = serde_json::json!({});
             let env = settings_config.get("env").unwrap_or(&default_env);
 
-            let base_url = env.get("ANTHROPIC_BASE_URL")
+            let base_url = env
+                .get("ANTHROPIC_BASE_URL")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
 
-            let api_key = env.get("ANTHROPIC_AUTH_TOKEN")
+            let api_key = env
+                .get("ANTHROPIC_AUTH_TOKEN")
                 .or(env.get("ANTHROPIC_API_KEY"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -435,8 +451,10 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
         anyhow::bail!("No valid providers found in cc-switch database");
     }
 
-    let mut config = AppConfig::default();
-    config.providers = providers;
+    let mut config = AppConfig {
+        providers,
+        ..Default::default()
+    };
 
     // Set the first provider as default
     if let Some(first) = config.providers.first_mut() {
@@ -447,6 +465,7 @@ pub fn import_from_cc_switch() -> anyhow::Result<AppConfig> {
 }
 
 /// Generate example config
+#[allow(dead_code)]
 pub fn generate_example_config() -> AppConfig {
     AppConfig {
         port: 16789,

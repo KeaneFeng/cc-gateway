@@ -1,13 +1,13 @@
 class CcGateway < Formula
   desc "Multi-provider aggregation gateway for Claude Code"
   homepage "https://github.com/KeaneFeng/cc-gateway"
-  version "0.3.0"
+  version "0.4.0"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.3.0/cc-gateway-aarch64-apple-darwin.tar.gz"
-      sha256 "dfe6c1d6df37ba575d7d19784a36aabd6d09a5ec3430ffaba51b1fe98b09e84c"
+      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.0/cc-gateway-aarch64-apple-darwin.tar.gz"
+      sha256 "75eebcf12d72c7c4f88cb813beed4f5f4d2daab8a2639b7a42ecaef58241b077"
     else
       depends_on "rust" => :build
       install do
@@ -18,11 +18,11 @@ class CcGateway < Formula
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.3.0/cc-gateway-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "eb346916f93f89a695b463c7c779df25211749783510f9eb8d93d72bed07ee8f"
+      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.0/cc-gateway-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "PLACEHOLDER_SHA256"
     else
-      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.3.0/cc-gateway-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "a2dd3d9114c1cfa5fea277a5f99473cb7f12cc1a4588b025cecaa50d64bf5782"
+      url "https://github.com/KeaneFeng/cc-gateway/releases/download/v0.4.0/cc-gateway-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "PLACEHOLDER_SHA256"
     end
   end
 
@@ -40,11 +40,12 @@ class CcGateway < Formula
     <<~EOS
       To get started with cc-gateway:
 
-        # 1. Add providers from presets
+        # 1. Launch interactive dashboard
+        cc-gateway
+
+        # Or add providers from CLI:
         cc-gateway add mimo      # Xiaomi Mimo
         cc-gateway add kimi      # Moonshot Kimi
-        cc-gateway add glm       # Zhipu GLM
-        cc-gateway add qwen      # Alibaba Qwen
 
         # 2. Start the server (background)
         cc-gateway start -d

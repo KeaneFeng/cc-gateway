@@ -1,3 +1,4 @@
 pub mod handlers;
-pub mod transform;
 pub mod streaming;
+pub mod thinking;
+pub mod transform;

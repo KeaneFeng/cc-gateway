@@ -61,7 +61,8 @@ pub fn openai_to_anthropic_stream(
                                     }
                                 }
                             });
-                            events.push(format!("event: message_start\ndata: {}\n\n", message_start));
+                            events
+                                .push(format!("event: message_start\ndata: {}\n\n", message_start));
 
                             // Start content block
                             let content_block_start = json!({
@@ -72,15 +73,22 @@ pub fn openai_to_anthropic_stream(
                                     "text": ""
                                 }
                             });
-                            events.push(format!("event: content_block_start\ndata: {}\n\n", content_block_start));
+                            events.push(format!(
+                                "event: content_block_start\ndata: {}\n\n",
+                                content_block_start
+                            ));
                         }
 
                         // Process delta
-                        if let Some(choices) = openai_chunk.get("choices").and_then(|c| c.as_array()) {
+                        if let Some(choices) =
+                            openai_chunk.get("choices").and_then(|c| c.as_array())
+                        {
                             if let Some(choice) = choices.first() {
                                 if let Some(delta) = choice.get("delta") {
                                     // Text content
-                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                    if let Some(content) =
+                                        delta.get("content").and_then(|c| c.as_str())
+                                    {
                                         if !content.is_empty() {
                                             let delta = json!({
                                                 "type": "content_block_delta",
@@ -90,17 +98,30 @@ pub fn openai_to_anthropic_stream(
                                                     "text": content
                                                 }
                                             });
-                                            events.push(format!("event: content_block_delta\ndata: {}\n\n", delta));
+                                            events.push(format!(
+                                                "event: content_block_delta\ndata: {}\n\n",
+                                                delta
+                                            ));
                                         }
                                     }
 
                                     // Tool calls
-                                    if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                    if let Some(tool_calls) =
+                                        delta.get("tool_calls").and_then(|t| t.as_array())
+                                    {
                                         for tc in tool_calls {
-                                            let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                            let index = tc
+                                                .get("index")
+                                                .and_then(|i| i.as_u64())
+                                                .unwrap_or(0)
+                                                as usize;
                                             let function = tc.get("function");
-                                            let name = function.and_then(|f| f.get("name")).and_then(|n| n.as_str());
-                                            let arguments = function.and_then(|f| f.get("arguments")).and_then(|a| a.as_str());
+                                            let name = function
+                                                .and_then(|f| f.get("name"))
+                                                .and_then(|n| n.as_str());
+                                            let arguments = function
+                                                .and_then(|f| f.get("arguments"))
+                                                .and_then(|a| a.as_str());
 
                                             if let Some(name) = name {
                                                 // Start tool use block
@@ -114,7 +135,10 @@ pub fn openai_to_anthropic_stream(
                                                         "input": {}
                                                     }
                                                 });
-                                                events.push(format!("event: content_block_start\ndata: {}\n\n", content_block_start));
+                                                events.push(format!(
+                                                    "event: content_block_start\ndata: {}\n\n",
+                                                    content_block_start
+                                                ));
                                             }
 
                                             if let Some(args) = arguments {
@@ -127,16 +151,23 @@ pub fn openai_to_anthropic_stream(
                                                             "partial_json": args
                                                         }
                                                     });
-                                                    events.push(format!("event: content_block_delta\ndata: {}\n\n", delta));
+                                                    events.push(format!(
+                                                        "event: content_block_delta\ndata: {}\n\n",
+                                                        delta
+                                                    ));
                                                 }
                                             }
                                         }
                                     }
 
                                     // Check for finish reason
-                                    if let Some(finish_reason) = choice.get("finish_reason").and_then(|f| f.as_str()) {
+                                    if let Some(finish_reason) =
+                                        choice.get("finish_reason").and_then(|f| f.as_str())
+                                    {
                                         // Stop content block
-                                        events.push("event: content_block_stop\ndata: {}\n\n".to_string());
+                                        events.push(
+                                            "event: content_block_stop\ndata: {}\n\n".to_string(),
+                                        );
 
                                         // Send message_delta with stop_reason
                                         let stop_reason = match finish_reason {
@@ -156,11 +187,18 @@ pub fn openai_to_anthropic_stream(
                                                 "output_tokens": 0
                                             }
                                         });
-                                        events.push(format!("event: message_delta\ndata: {}\n\n", message_delta));
-                                        events.push("event: message_stop\ndata: {}\n\n".to_string());
+                                        events.push(format!(
+                                            "event: message_delta\ndata: {}\n\n",
+                                            message_delta
+                                        ));
+                                        events
+                                            .push("event: message_stop\ndata: {}\n\n".to_string());
 
                                         let output = events.join("");
-                                        return Some((Ok(output), (stream, model, message_id, true)));
+                                        return Some((
+                                            Ok(output),
+                                            (stream, model, message_id, true),
+                                        ));
                                     }
                                 }
                             }
@@ -173,7 +211,7 @@ pub fn openai_to_anthropic_stream(
                     }
                     Some(Err(e)) => {
                         return Some((
-                            Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                            Err(std::io::Error::other(e.to_string())),
                             (stream, model, message_id, started),
                         ));
                     }
@@ -195,7 +233,8 @@ pub fn openai_to_anthropic_stream(
                                     "usage": {"input_tokens": 0, "output_tokens": 0}
                                 }
                             });
-                            events.push(format!("event: message_start\ndata: {}\n\n", message_start));
+                            events
+                                .push(format!("event: message_start\ndata: {}\n\n", message_start));
                         }
                         events.push("event: message_stop\ndata: {}\n\n".to_string());
                         let output = events.join("");
@@ -216,14 +255,18 @@ mod tests {
     #[tokio::test]
     async fn test_stream_conversion() {
         let openai_chunks = vec![
-            Ok(r#"data: {"choices":[{"delta":{"role":"assistant","content":"Hello"}}]}"#.to_string()),
+            Ok(
+                r#"data: {"choices":[{"delta":{"role":"assistant","content":"Hello"}}]}"#
+                    .to_string(),
+            ),
             Ok(r#"data: {"choices":[{"delta":{"content":" world"}}]}"#.to_string()),
             Ok(r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#.to_string()),
             Ok("data: [DONE]".to_string()),
         ];
 
         let stream = futures::stream::iter(openai_chunks);
-        let anthropic_stream = openai_to_anthropic_stream(stream, "test-model".to_string(), "msg_test".to_string());
+        let anthropic_stream =
+            openai_to_anthropic_stream(stream, "test-model".to_string(), "msg_test".to_string());
 
         let results: Vec<_> = futures::StreamExt::collect(anthropic_stream).await;
         assert!(!results.is_empty());

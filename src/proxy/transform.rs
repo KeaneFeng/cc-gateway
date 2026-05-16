@@ -143,18 +143,22 @@ fn convert_message_to_openai(role: &str, content: Option<&Value>) -> Result<Vec<
                                 }));
                             }
                             Some("tool_result") => {
-                                let tool_use_id = part.get("tool_use_id").and_then(|i| i.as_str()).unwrap_or("");
+                                let tool_use_id = part
+                                    .get("tool_use_id")
+                                    .and_then(|i| i.as_str())
+                                    .unwrap_or("");
                                 let content = part.get("content");
-                                let result_content = if let Some(text) = content.and_then(|c| c.as_str()) {
-                                    text.to_string()
-                                } else if let Some(arr) = content.and_then(|c| c.as_array()) {
-                                    arr.iter()
-                                        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                } else {
-                                    String::new()
-                                };
+                                let result_content =
+                                    if let Some(text) = content.and_then(|c| c.as_str()) {
+                                        text.to_string()
+                                    } else if let Some(arr) = content.and_then(|c| c.as_array()) {
+                                        arr.iter()
+                                            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    } else {
+                                        String::new()
+                                    };
                                 tool_results.push(json!({
                                     "role": "tool",
                                     "tool_call_id": tool_use_id,
@@ -193,8 +197,14 @@ fn normalize_system_messages(messages: &mut Vec<Value>) {
         if messages[i].get("role").and_then(|r| r.as_str()) == Some("system")
             && messages[i + 1].get("role").and_then(|r| r.as_str()) == Some("system")
         {
-            let content1 = messages[i].get("content").and_then(|c| c.as_str()).unwrap_or("");
-            let content2 = messages[i + 1].get("content").and_then(|c| c.as_str()).unwrap_or("");
+            let content1 = messages[i]
+                .get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
+            let content2 = messages[i + 1]
+                .get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
             let merged = format!("{}\n{}", content1, content2);
             messages[i]["content"] = json!(merged);
             messages.remove(i + 1);
@@ -238,8 +248,16 @@ pub fn openai_to_anthropic_response(openai_response: Value, model: &str) -> Valu
                 if let Some(tool_calls) = message.get("tool_calls").and_then(|t| t.as_array()) {
                     for tc in tool_calls {
                         let id = tc.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                        let name = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).unwrap_or("");
-                        let arguments = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).unwrap_or("{}");
+                        let name = tc
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        let arguments = tc
+                            .get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("{}");
                         let input: Value = serde_json::from_str(arguments).unwrap_or(json!({}));
                         content.push(json!({
                             "type": "tool_use",

@@ -29,6 +29,7 @@ impl Provider {
     }
 
     /// Get the model ID for /v1/models endpoint (claude-xxx format)
+    #[allow(dead_code)]
     pub fn model_id(&self) -> String {
         format!("claude-{}", self.config.id)
     }
@@ -48,7 +49,11 @@ impl Provider {
         body: Value,
         headers: Vec<(String, String)>,
     ) -> Result<reqwest::Response, reqwest::Error> {
-        let url = format!("{}/{}", self.config.base_url.trim_end_matches('/'), endpoint.trim_start_matches('/'));
+        let url = format!(
+            "{}/{}",
+            self.config.base_url.trim_end_matches('/'),
+            endpoint.trim_start_matches('/')
+        );
 
         let mut request = self.client.post(&url);
 
@@ -94,7 +99,11 @@ impl Provider {
         mut body: Value,
         headers: Vec<(String, String)>,
     ) -> Result<reqwest::Response, reqwest::Error> {
-        let url = format!("{}/{}", self.config.base_url.trim_end_matches('/'), endpoint.trim_start_matches('/'));
+        let url = format!(
+            "{}/{}",
+            self.config.base_url.trim_end_matches('/'),
+            endpoint.trim_start_matches('/')
+        );
 
         let mut request = self.client.post(&url);
 
@@ -142,7 +151,11 @@ impl Provider {
         body: Value,
         headers: Vec<(String, String)>,
     ) -> Result<reqwest::Response, reqwest::Error> {
-        let url = format!("{}/{}", self.config.base_url.trim_end_matches('/'), endpoint.trim_start_matches('/'));
+        let url = format!(
+            "{}/{}",
+            self.config.base_url.trim_end_matches('/'),
+            endpoint.trim_start_matches('/')
+        );
 
         let mut request = self.client.post(&url);
 
@@ -182,7 +195,11 @@ impl Provider {
         mut body: Value,
         headers: Vec<(String, String)>,
     ) -> Result<reqwest::Response, reqwest::Error> {
-        let url = format!("{}/{}", self.config.base_url.trim_end_matches('/'), endpoint.trim_start_matches('/'));
+        let url = format!(
+            "{}/{}",
+            self.config.base_url.trim_end_matches('/'),
+            endpoint.trim_start_matches('/')
+        );
 
         let mut request = self.client.post(&url);
 

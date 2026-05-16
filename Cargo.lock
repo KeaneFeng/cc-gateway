@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "cc-gateway"
-version = "0.3.0"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -232,6 +232,7 @@ dependencies = [
  "indicatif",
  "reqwest",
  "rusqlite",
+ "scopeguard",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

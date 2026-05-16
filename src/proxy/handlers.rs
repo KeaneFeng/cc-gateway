@@ -10,9 +10,9 @@ use axum::{
 };
 use futures::StreamExt;
 use serde_json::{json, Value};
-use tracing::{info, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tracing::{debug, info, warn};
 
 use crate::config::AppConfig;
 use crate::database::{Database, RequestLog};
@@ -51,8 +51,8 @@ impl SessionRouter {
             return;
         }
 
-        let mut map = self.session_map.lock().unwrap();
-        let mut count = 0;
+        // Collect all session→project mappings WITHOUT holding the lock
+        let mut discovered: HashMap<String, String> = HashMap::new();
 
         if let Ok(entries) = std::fs::read_dir(&projects_dir) {
             for entry in entries.flatten() {
@@ -60,23 +60,22 @@ impl SessionRouter {
                 if !path.is_dir() {
                     continue;
                 }
-                // Each directory contains .jsonl files
                 if let Ok(files) = std::fs::read_dir(&path) {
                     for file in files.flatten() {
                         let fpath = file.path();
                         if fpath.extension().map(|e| e == "jsonl").unwrap_or(false) {
                             if let Ok(content) = std::fs::read_to_string(&fpath) {
                                 for line in content.lines() {
-                                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                                    if let Ok(json) =
+                                        serde_json::from_str::<serde_json::Value>(line)
+                                    {
                                         if let (Some(sid), Some(cwd)) = (
                                             json.get("sessionId").and_then(|v| v.as_str()),
                                             json.get("cwd").and_then(|v| v.as_str()),
                                         ) {
-                                            map.entry(sid.to_string())
-                                                .or_insert_with(|| {
-                                                    count += 1;
-                                                    cwd.to_string()
-                                                });
+                                            discovered
+                                                .entry(sid.to_string())
+                                                .or_insert_with(|| cwd.to_string());
                                         }
                                     }
                                 }
@@ -86,8 +85,18 @@ impl SessionRouter {
                 }
             }
         }
+
+        let count = discovered.len();
         if count > 0 {
-            tracing::info!("🗺️ SessionRouter: loaded {} session→project mappings", count);
+            // Merge into the shared map under a brief lock
+            let mut map = self.session_map.lock().unwrap();
+            for (sid, cwd) in discovered {
+                map.entry(sid).or_insert(cwd);
+            }
+            tracing::info!(
+                "🗺️ SessionRouter: loaded {} session→project mappings",
+                count
+            );
         }
     }
 
@@ -121,35 +130,57 @@ impl SessionRouter {
             return;
         }
 
-        let mut map = self.session_map.lock().unwrap();
+        // Scan WITHOUT holding the lock — collect the result, then merge briefly
+        let mut found_cwd: Option<String> = None;
+
         if let Ok(entries) = std::fs::read_dir(&projects_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !path.is_dir() { continue; }
+                if !path.is_dir() {
+                    continue;
+                }
                 if let Ok(files) = std::fs::read_dir(&path) {
                     for file in files.flatten() {
                         let fpath = file.path();
                         if fpath.extension().map(|e| e == "jsonl").unwrap_or(false) {
                             if let Ok(content) = std::fs::read_to_string(&fpath) {
                                 for line in content.lines() {
-                                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                                    if let Ok(json) =
+                                        serde_json::from_str::<serde_json::Value>(line)
+                                    {
                                         if let (Some(sid), Some(cwd)) = (
                                             json.get("sessionId").and_then(|v| v.as_str()),
                                             json.get("cwd").and_then(|v| v.as_str()),
                                         ) {
                                             if sid == session_id {
-                                                tracing::info!("🗺️ SessionRouter: discovered new session {} → {}", sid, cwd);
-                                                map.insert(sid.to_string(), cwd.to_string());
-                                                return;
+                                                found_cwd = Some(cwd.to_string());
+                                                break;
                                             }
                                         }
                                     }
                                 }
                             }
+                            if found_cwd.is_some() {
+                                break;
+                            }
                         }
                     }
                 }
+                if found_cwd.is_some() {
+                    break;
+                }
             }
+        }
+
+        // Brief lock to insert the discovered mapping
+        if let Some(cwd) = found_cwd {
+            tracing::info!(
+                "🗺️ SessionRouter: discovered new session {} → {}",
+                session_id,
+                cwd
+            );
+            let mut map = self.session_map.lock().unwrap();
+            map.insert(session_id.to_string(), cwd);
         }
     }
 }
@@ -157,7 +188,7 @@ impl SessionRouter {
 /// Shared application state
 /// Shared mutable state (wrapped in Arc<Mutex> for cross-clone updates)
 #[derive(Clone)]
-struct SharedState {
+pub(crate) struct SharedState {
     pub config: AppConfig,
     pub providers: Vec<Provider>,
     pub session_router: SessionRouter,
@@ -210,7 +241,7 @@ impl AppState {
     /// Reload config from file and rebuild all shared state
     pub fn reload_config(&self) -> anyhow::Result<()> {
         let config = AppConfig::load(std::path::Path::new(&self.config_path))?;
-        
+
         let providers: Vec<Provider> = config
             .providers
             .iter()
@@ -239,10 +270,15 @@ impl AppState {
     }
 
     /// Get the current active provider (runtime-switchable)
+    #[allow(dead_code)]
     pub fn get_current_provider(&self) -> Option<Provider> {
         let shared = self.shared.lock().unwrap();
         if let Some(ref id) = shared.current_provider_id {
-            shared.providers.iter().find(|p| &p.config.id == id).cloned()
+            shared
+                .providers
+                .iter()
+                .find(|p| &p.config.id == id)
+                .cloned()
         } else {
             shared.providers.first().cloned()
         }
@@ -283,8 +319,16 @@ pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
         })
         .collect();
 
-    let first_id = models.first().and_then(|m| m["id"].as_str()).unwrap_or("").to_string();
-    let last_id = models.last().and_then(|m| m["id"].as_str()).unwrap_or("").to_string();
+    let first_id = models
+        .first()
+        .and_then(|m| m["id"].as_str())
+        .unwrap_or("")
+        .to_string();
+    let last_id = models
+        .last()
+        .and_then(|m| m["id"].as_str())
+        .unwrap_or("")
+        .to_string();
 
     Json(json!({
         "data": models,
@@ -300,15 +344,15 @@ pub async fn handle_messages(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ProxyError> {
-    // DEBUG: Log full request to identify session info
-    info!("📥 REQUEST HEADERS: {:?}", headers);
-    info!("📥 REQUEST BODY: {}", serde_json::to_string(&body).unwrap_or_default());
+    // DEBUG: Log full request (only visible with RUST_LOG=debug)
+    debug!("📥 REQUEST HEADERS: {:?}", headers);
+    debug!(
+        "📥 REQUEST BODY: {}",
+        serde_json::to_string(&body).unwrap_or_default()
+    );
 
     // Extract model from request
-    let model_id = body
-        .get("model")
-        .and_then(|m| m.as_str())
-        .unwrap_or("");
+    let model_id = body.get("model").and_then(|m| m.as_str()).unwrap_or("");
 
     // Session-based project routing: extract session_id from header
     let session_id = headers
@@ -317,15 +361,22 @@ pub async fn handle_messages(
         .map(|s| s.to_string());
 
     // Find provider: session project routing (highest priority) → current provider → model match
-    let mut provider = {
+    let provider = {
         let shared = state.shared.lock().unwrap();
-        
+
         // 1. Session-based project routing (highest priority)
         let session_provider = if let Some(ref sid) = session_id {
-            shared.session_router.resolve_provider(sid).and_then(|provider_id| {
-                info!("🗺️ Session {} → project provider: {}", sid, provider_id);
-                shared.providers.iter().find(|p| p.config.id == provider_id).cloned()
-            })
+            shared
+                .session_router
+                .resolve_provider(sid)
+                .and_then(|provider_id| {
+                    info!("🗺️ Session {} → project provider: {}", sid, provider_id);
+                    shared
+                        .providers
+                        .iter()
+                        .find(|p| p.config.id == provider_id)
+                        .cloned()
+                })
         } else {
             None
         };
@@ -334,13 +385,23 @@ pub async fn handle_messages(
             p
         } else {
             // 2. Current provider (default fallback)
-            let current = shared.current_provider_id.as_ref()
-                .and_then(|id| shared.providers.iter().find(|p| &p.config.id == id).cloned())
+            let current = shared
+                .current_provider_id
+                .as_ref()
+                .and_then(|id| {
+                    shared
+                        .providers
+                        .iter()
+                        .find(|p| &p.config.id == id)
+                        .cloned()
+                })
                 .or_else(|| shared.providers.first().cloned());
 
             if !model_id.is_empty() {
                 // 3. Model match: only for explicit provider selection (claude-{id} format)
-                let model_matched = shared.providers.iter()
+                let model_matched = shared
+                    .providers
+                    .iter()
                     .find(|p| {
                         let full_id = format!("claude-{}", p.config.id);
                         full_id == model_id
@@ -376,7 +437,11 @@ pub async fn handle_messages(
         provider.config.id,
         provider.config.name,
         provider.config.base_url,
-        if is_anthropic_format(&provider) { "anthropic" } else { "openai" }
+        if is_anthropic_format(&provider) {
+            "anthropic"
+        } else {
+            "openai"
+        }
     );
 
     // Replace model in body with the actual model
@@ -390,7 +455,10 @@ pub async fn handle_messages(
         if let Some(effort) = output_config.get("effort").and_then(|e| e.as_str()) {
             let normalized = if let Some(ref configured) = provider.config.effort_level {
                 // Provider has explicit effort_level configured — use it
-                info!("📝 Effort overridden by provider config: {} → {}", effort, configured);
+                info!(
+                    "📝 Effort overridden by provider config: {} → {}",
+                    effort, configured
+                );
                 configured.clone()
             } else {
                 // No config override — apply fallback normalization for unsupported values
@@ -406,8 +474,26 @@ pub async fn handle_messages(
         }
     }
 
+    // Remove max_output_tokens — not supported by most providers (MiMo, etc.)
+    // Claude Code sends this newer parameter, but providers expect max_tokens
+    if let Some(obj) = body.as_object_mut() {
+        if obj.remove("max_output_tokens").is_some() {
+            info!("📝 Removed unsupported max_output_tokens parameter");
+        }
+    }
+
+    // Strip thinking blocks from assistant messages before forwarding.
+    // Claude Code uses extended thinking, but some providers (MiMo) require ALL
+    // assistant messages to carry reasoning_content when thinking is enabled.
+    // Missing thinking blocks in tool_use chains cause 400 errors.
+    // Aligned with cc-switch's strip_thinking_blocks approach.
+    crate::proxy::thinking::sanitize_thinking_blocks(&mut body);
+
     // Check if streaming is requested
-    let is_stream = body.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let is_stream = body
+        .get("stream")
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false);
 
     // Check if provider uses Anthropic format directly
     let use_anthropic_format = is_anthropic_format(&provider);
@@ -415,15 +501,13 @@ pub async fn handle_messages(
     // Extract headers to forward
     let headers_vec: Vec<(String, String)> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str().ok().map(|v| (k.to_string(), v.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
         .collect();
 
     if use_anthropic_format {
         // Forward directly as Anthropic format (no conversion needed)
         let endpoint = "v1/messages";
-        
+
         if is_stream {
             let response = provider
                 .forward_anthropic_streaming(endpoint, body, headers_vec)
@@ -441,10 +525,8 @@ pub async fn handle_messages(
 
             // For Anthropic format, directly forward the raw SSE stream
             let stream = response.bytes_stream();
-            let body_stream = stream.map(|result| {
-                result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            });
-            
+            let body_stream = stream.map(|result| result.map_err(std::io::Error::other));
+
             Ok(axum::response::Response::builder()
                 .status(200)
                 .header("content-type", "text/event-stream")
@@ -474,11 +556,23 @@ pub async fn handle_messages(
 
             // Log usage for Anthropic format
             let usage = anthropic_response.get("usage");
-            let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-            let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-            let cache_read = usage.and_then(|u| u.get("cache_read_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-            let cache_creation = usage.and_then(|u| u.get("cache_creation_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-            
+            let input_tokens = usage
+                .and_then(|u| u.get("input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output_tokens = usage
+                .and_then(|u| u.get("output_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let cache_read = usage
+                .and_then(|u| u.get("cache_read_input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let cache_creation = usage
+                .and_then(|u| u.get("cache_creation_input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+
             let request_id = format!("req_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
             let db = state.db.lock().unwrap();
             match db.log_request(&RequestLog {
@@ -499,7 +593,10 @@ pub async fn handle_messages(
                 is_streaming: false,
                 created_at: chrono::Utc::now().timestamp(),
             }) {
-                Ok(_) => info!("📊 Usage logged: provider={} tokens={}/{}", provider.config.name, input_tokens, output_tokens),
+                Ok(_) => info!(
+                    "📊 Usage logged: provider={} tokens={}/{}",
+                    provider.config.name, input_tokens, output_tokens
+                ),
                 Err(e) => warn!("⚠️ Failed to log usage: {}", e),
             }
 
@@ -507,8 +604,8 @@ pub async fn handle_messages(
         }
     } else {
         // Convert Anthropic request to OpenAI format
-        let openai_body = transform::anthropic_to_openai(body.clone())
-            .map_err(|e| ProxyError::TransformError(e))?;
+        let openai_body =
+            transform::anthropic_to_openai(body.clone()).map_err(ProxyError::TransformError)?;
 
         if is_stream {
             let response = provider
@@ -529,16 +626,16 @@ pub async fn handle_messages(
             let string_stream = byte_stream.map(|result| {
                 result
                     .map(|bytes| String::from_utf8_lossy(bytes.as_ref()).to_string())
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    .map_err(std::io::Error::other)
             });
 
             let model = provider.config.model.clone();
             let message_id = format!("msg_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-            let anthropic_stream = streaming::openai_to_anthropic_stream(string_stream, model, message_id);
+            let anthropic_stream =
+                streaming::openai_to_anthropic_stream(string_stream, model, message_id);
 
-            let sse_stream = anthropic_stream.map(|result| {
-                result.map(|data| axum::response::sse::Event::default().data(data))
-            });
+            let sse_stream = anthropic_stream
+                .map(|result| result.map(|data| axum::response::sse::Event::default().data(data)));
 
             Ok(Sse::new(sse_stream).into_response())
         } else {
@@ -566,11 +663,23 @@ pub async fn handle_messages(
 
             // Log usage
             let usage = anthropic_response.get("usage");
-            let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-            let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-            let cache_read = usage.and_then(|u| u.get("cache_read_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-            let cache_creation = usage.and_then(|u| u.get("cache_creation_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-            
+            let input_tokens = usage
+                .and_then(|u| u.get("input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output_tokens = usage
+                .and_then(|u| u.get("output_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let cache_read = usage
+                .and_then(|u| u.get("cache_read_input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let cache_creation = usage
+                .and_then(|u| u.get("cache_creation_input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+
             let request_id = format!("req_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
             let db = state.db.lock().unwrap();
             match db.log_request(&RequestLog {
@@ -591,11 +700,17 @@ pub async fn handle_messages(
                 is_streaming: false,
                 created_at: chrono::Utc::now().timestamp(),
             }) {
-                Ok(_) => info!("📊 Usage logged: provider={} tokens={}/{}", provider.config.name, input_tokens, output_tokens),
+                Ok(_) => info!(
+                    "📊 Usage logged: provider={} tokens={}/{}",
+                    provider.config.name, input_tokens, output_tokens
+                ),
                 Err(e) => warn!("⚠️ Failed to log usage: {}", e),
             }
-            
-            info!("✅ Response: provider={} completed, tokens={}/{}", provider.config.name, input_tokens, output_tokens);
+
+            info!(
+                "✅ Response: provider={} completed, tokens={}/{}",
+                provider.config.name, input_tokens, output_tokens
+            );
             Ok(Json(anthropic_response).into_response())
         }
     }
@@ -680,7 +795,7 @@ pub async fn list_models_for_provider(
 ) -> Json<Value> {
     let shared = state.shared.lock().unwrap();
     let provider = shared.providers.iter().find(|p| p.config.id == provider_id);
-    
+
     match provider {
         Some(p) => {
             let model = json!({
@@ -696,14 +811,12 @@ pub async fn list_models_for_provider(
                 "last_id": format!("claude-{}", p.config.id),
             }))
         }
-        None => {
-            Json(json!({
-                "data": [],
-                "has_more": false,
-                "first_id": "",
-                "last_id": "",
-            }))
-        }
+        None => Json(json!({
+            "data": [],
+            "has_more": false,
+            "first_id": "",
+            "last_id": "",
+        })),
     }
 }
 
@@ -717,7 +830,9 @@ pub async fn handle_messages_for_provider(
     // Find provider by ID, clone it, release lock
     let provider = {
         let shared = state.shared.lock().unwrap();
-        shared.providers.iter()
+        shared
+            .providers
+            .iter()
             .find(|p| p.config.id == provider_id)
             .cloned()
             .ok_or(ProxyError::ProviderNotFound(provider_id.clone()))?
@@ -743,20 +858,24 @@ pub async fn handle_messages_for_provider(
         provider.config.id,
         provider.config.name,
         actual_model,
-        if is_anthropic_format(&provider) { "anthropic" } else { "openai" }
+        if is_anthropic_format(&provider) {
+            "anthropic"
+        } else {
+            "openai"
+        }
     );
 
     // Replace model in body with the actual model
-    let model_id = body
-        .get("model")
-        .and_then(|m| m.as_str())
-        .unwrap_or("");
+    let model_id = body.get("model").and_then(|m| m.as_str()).unwrap_or("");
     let mut body = body.clone();
     body["model"] = serde_json::json!(actual_model);
     info!("📝 Model replaced: {} → {}", model_id, actual_model);
 
     // Check if streaming is requested
-    let is_stream = body.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let is_stream = body
+        .get("stream")
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false);
 
     // Check if provider uses Anthropic format directly
     let use_anthropic_format = is_anthropic_format(&provider);
@@ -764,15 +883,13 @@ pub async fn handle_messages_for_provider(
     // Extract headers to forward
     let headers_vec: Vec<(String, String)> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str().ok().map(|v| (k.to_string(), v.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
         .collect();
 
     if use_anthropic_format {
         // Forward directly as Anthropic format (no conversion needed)
         let endpoint = "v1/messages";
-        
+
         if is_stream {
             let response = provider
                 .forward_anthropic_streaming(endpoint, body, headers_vec)
@@ -790,10 +907,8 @@ pub async fn handle_messages_for_provider(
 
             // For Anthropic format, directly forward the raw SSE stream
             let stream = response.bytes_stream();
-            let body_stream = stream.map(|result| {
-                result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            });
-            
+            let body_stream = stream.map(|result| result.map_err(std::io::Error::other));
+
             Ok(axum::response::Response::builder()
                 .status(200)
                 .header("content-type", "text/event-stream")
@@ -816,7 +931,9 @@ pub async fn handle_messages_for_provider(
                 )));
             }
 
-            let response_body: Value = response.json().await
+            let response_body: Value = response
+                .json()
+                .await
                 .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
 
             // Log usage
@@ -826,9 +943,9 @@ pub async fn handle_messages_for_provider(
         }
     } else {
         // Convert Anthropic format to OpenAI and forward
-        let openai_body = transform::anthropic_to_openai(body.clone())
-            .map_err(|e| ProxyError::UpstreamError(e))?;
-        
+        let openai_body =
+            transform::anthropic_to_openai(body.clone()).map_err(ProxyError::UpstreamError)?;
+
         if is_stream {
             let response = provider
                 .forward_streaming_request("v1/chat/completions", openai_body, headers_vec)
@@ -848,16 +965,16 @@ pub async fn handle_messages_for_provider(
             let string_stream = byte_stream.map(|result| {
                 result
                     .map(|bytes| String::from_utf8_lossy(bytes.as_ref()).to_string())
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    .map_err(std::io::Error::other)
             });
 
             let model = provider.config.model.clone();
             let message_id = format!("msg_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-            let anthropic_stream = streaming::openai_to_anthropic_stream(string_stream, model, message_id);
+            let anthropic_stream =
+                streaming::openai_to_anthropic_stream(string_stream, model, message_id);
 
-            let sse_stream = anthropic_stream.map(|result| {
-                result.map(|data| axum::response::sse::Event::default().data(data))
-            });
+            let sse_stream = anthropic_stream
+                .map(|result| result.map(|data| axum::response::sse::Event::default().data(data)));
 
             Ok(Sse::new(sse_stream).into_response())
         } else {
@@ -875,11 +992,14 @@ pub async fn handle_messages_for_provider(
                 )));
             }
 
-            let openai_response: Value = response.json().await
+            let openai_response: Value = response
+                .json()
+                .await
                 .map_err(|e| ProxyError::UpstreamError(e.to_string()))?;
 
             // Convert OpenAI response to Anthropic format
-            let anthropic_response = transform::openai_to_anthropic_response(openai_response, &provider.config.model);
+            let anthropic_response =
+                transform::openai_to_anthropic_response(openai_response, &provider.config.model);
 
             // Log usage
             log_usage(&state, &provider, &anthropic_response);
@@ -892,10 +1012,22 @@ pub async fn handle_messages_for_provider(
 /// Log usage to database
 fn log_usage(state: &AppState, provider: &Provider, response: &Value) {
     let usage = response.get("usage");
-    let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-    let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-    let cache_read = usage.and_then(|u| u.get("cache_read_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
-    let cache_creation = usage.and_then(|u| u.get("cache_creation_input_tokens")).and_then(|v| v.as_i64()).unwrap_or(0);
+    let input_tokens = usage
+        .and_then(|u| u.get("input_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let output_tokens = usage
+        .and_then(|u| u.get("output_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let cache_read = usage
+        .and_then(|u| u.get("cache_read_input_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let cache_creation = usage
+        .and_then(|u| u.get("cache_creation_input_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
 
     let request_id = format!("req_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
     let db = state.db.lock().unwrap();
@@ -917,7 +1049,10 @@ fn log_usage(state: &AppState, provider: &Provider, response: &Value) {
         is_streaming: false,
         created_at: chrono::Utc::now().timestamp(),
     }) {
-        Ok(_) => info!("📊 Usage logged: provider={} tokens={}/{}", provider.config.name, input_tokens, output_tokens),
+        Ok(_) => info!(
+            "📊 Usage logged: provider={} tokens={}/{}",
+            provider.config.name, input_tokens, output_tokens
+        ),
         Err(e) => warn!("⚠️ Failed to log usage: {}", e),
     }
 }
@@ -934,12 +1069,23 @@ pub async fn switch_provider(
 
     if state.switch_provider(provider_id) {
         let shared = state.shared.lock().unwrap();
-        let provider_name = shared.providers.iter()
+        let provider_name = shared
+            .providers
+            .iter()
             .find(|p| p.config.id == provider_id)
-            .map(|p| p.config.display_name.as_deref().unwrap_or(&p.config.name).to_string())
+            .map(|p| {
+                p.config
+                    .display_name
+                    .as_deref()
+                    .unwrap_or(&p.config.name)
+                    .to_string()
+            })
             .unwrap_or_default();
 
-        info!("🎯 Provider switched to: {} ({})", provider_name, provider_id);
+        info!(
+            "🎯 Provider switched to: {} ({})",
+            provider_name, provider_id
+        );
 
         Ok(Json(json!({
             "success": true,
@@ -952,11 +1098,11 @@ pub async fn switch_provider(
 }
 
 /// GET /api/current-provider - Get the current active provider
-pub async fn get_current_provider(
-    State(state): State<AppState>,
-) -> Json<Value> {
+pub async fn get_current_provider(State(state): State<AppState>) -> Json<Value> {
     let shared = state.shared.lock().unwrap();
-    let provider = shared.current_provider_id.as_ref()
+    let provider = shared
+        .current_provider_id
+        .as_ref()
         .and_then(|id| shared.providers.iter().find(|p| &p.config.id == id));
     let provider_id = shared.current_provider_id.clone();
 
@@ -968,12 +1114,21 @@ pub async fn get_current_provider(
 }
 
 /// POST /api/reload - Reload config from file
-pub async fn reload_config(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, ProxyError> {
-    state.reload_config()
+pub async fn reload_config(State(state): State<AppState>) -> Result<Json<Value>, ProxyError> {
+    // Read config to get log_level before reload
+    let new_log_level = crate::config::AppConfig::load(std::path::Path::new(&state.config_path))
+        .ok()
+        .map(|c| c.log_level);
+
+    state
+        .reload_config()
         .map_err(|e| ProxyError::UpstreamError(format!("Failed to reload config: {}", e)))?;
-    
+
+    // Apply log level change immediately (no restart needed)
+    if let Some(ref level) = new_log_level {
+        crate::set_log_level(level);
+    }
+
     Ok(Json(json!({
         "success": true,
         "message": "Config reloaded successfully"

@@ -1,8 +1,9 @@
 //! Database module - Compatible with cc-switch SQLite schema
 //!
 //! Uses the same database format as cc-switch for seamless migration
+#![allow(dead_code)]
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -256,23 +257,25 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, settings_config, website_url, category, is_current, 
                     in_failover_queue, cost_multiplier, provider_type, notes
-             FROM providers WHERE app_type = ?1 ORDER BY sort_index, name"
+             FROM providers WHERE app_type = ?1 ORDER BY sort_index, name",
         )?;
 
-        let providers = stmt.query_map(params![app_type], |row| {
-            Ok(ProviderRow {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                settings_config: row.get(2)?,
-                website_url: row.get(3)?,
-                category: row.get(4)?,
-                is_current: row.get(5)?,
-                in_failover_queue: row.get(6)?,
-                cost_multiplier: row.get(7)?,
-                provider_type: row.get(8)?,
-                notes: row.get(9)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let providers = stmt
+            .query_map(params![app_type], |row| {
+                Ok(ProviderRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    settings_config: row.get(2)?,
+                    website_url: row.get(3)?,
+                    category: row.get(4)?,
+                    is_current: row.get(5)?,
+                    in_failover_queue: row.get(6)?,
+                    cost_multiplier: row.get(7)?,
+                    provider_type: row.get(8)?,
+                    notes: row.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(providers)
     }
@@ -282,7 +285,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, settings_config, website_url, category, is_current, 
                     in_failover_queue, cost_multiplier, provider_type, notes
-             FROM providers WHERE id = ?1 AND app_type = ?2"
+             FROM providers WHERE id = ?1 AND app_type = ?2",
         )?;
 
         let mut rows = stmt.query_map(params![id, app_type], |row| {
@@ -355,9 +358,15 @@ impl Database {
     // =========================================================================
 
     /// Update provider health
-    pub fn update_health(&self, provider_id: &str, app_type: &str, success: bool, error: Option<&str>) -> anyhow::Result<()> {
+    pub fn update_health(
+        &self,
+        provider_id: &str,
+        app_type: &str,
+        success: bool,
+        error: Option<&str>,
+    ) -> anyhow::Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        
+
         if success {
             self.conn.execute(
                 "INSERT OR REPLACE INTO provider_health 
@@ -382,11 +391,15 @@ impl Database {
     }
 
     /// Get provider health
-    pub fn get_health(&self, provider_id: &str, app_type: &str) -> anyhow::Result<Option<ProviderHealth>> {
+    pub fn get_health(
+        &self,
+        provider_id: &str,
+        app_type: &str,
+    ) -> anyhow::Result<Option<ProviderHealth>> {
         let mut stmt = self.conn.prepare(
             "SELECT provider_id, app_type, is_healthy, consecutive_failures, 
                     last_success_at, last_failure_at, last_error
-             FROM provider_health WHERE provider_id = ?1 AND app_type = ?2"
+             FROM provider_health WHERE provider_id = ?1 AND app_type = ?2",
         )?;
 
         let mut rows = stmt.query_map(params![provider_id, app_type], |row| {
@@ -439,31 +452,38 @@ impl Database {
     }
 
     /// Get usage statistics for a date range
-    pub fn get_usage_stats(&self, app_type: &str, start_date: &str, end_date: &str) -> anyhow::Result<Vec<UsageStats>> {
+    pub fn get_usage_stats(
+        &self,
+        app_type: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> anyhow::Result<Vec<UsageStats>> {
         let mut stmt = self.conn.prepare(
             "SELECT date, provider_id, model, request_count, success_count,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     total_cost_usd, avg_latency_ms
              FROM usage_daily_rollups 
              WHERE app_type = ?1 AND date >= ?2 AND date <= ?3
-             ORDER BY date DESC"
+             ORDER BY date DESC",
         )?;
 
-        let stats = stmt.query_map(params![app_type, start_date, end_date], |row| {
-            Ok(UsageStats {
-                date: row.get(0)?,
-                provider_id: row.get(1)?,
-                model: row.get(2)?,
-                request_count: row.get(3)?,
-                success_count: row.get(4)?,
-                input_tokens: row.get(5)?,
-                output_tokens: row.get(6)?,
-                cache_read_tokens: row.get(7)?,
-                cache_creation_tokens: row.get(8)?,
-                total_cost_usd: row.get::<_, String>(9)?.parse().unwrap_or(0.0),
-                avg_latency_ms: row.get(10)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let stats = stmt
+            .query_map(params![app_type, start_date, end_date], |row| {
+                Ok(UsageStats {
+                    date: row.get(0)?,
+                    provider_id: row.get(1)?,
+                    model: row.get(2)?,
+                    request_count: row.get(3)?,
+                    success_count: row.get(4)?,
+                    input_tokens: row.get(5)?,
+                    output_tokens: row.get(6)?,
+                    cache_read_tokens: row.get(7)?,
+                    cache_creation_tokens: row.get(8)?,
+                    total_cost_usd: row.get::<_, String>(9)?.parse().unwrap_or(0.0),
+                    avg_latency_ms: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(stats)
     }
@@ -497,7 +517,11 @@ impl Database {
     }
 
     /// Get usage statistics grouped by provider
-    pub fn get_usage_by_provider(&self, app_type: &str, days: i32) -> anyhow::Result<Vec<ProviderUsage>> {
+    pub fn get_usage_by_provider(
+        &self,
+        app_type: &str,
+        days: i32,
+    ) -> anyhow::Result<Vec<ProviderUsage>> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 provider_id,
@@ -513,19 +537,92 @@ impl Database {
              ORDER BY total_requests DESC"
         )?;
 
-        let stats = stmt.query_map(params![app_type, days], |row| {
-            Ok(ProviderUsage {
-                provider_id: row.get(0)?,
-                total_requests: row.get(1)?,
-                total_success: row.get(2)?,
-                total_input_tokens: row.get(3)?,
-                total_output_tokens: row.get(4)?,
-                total_cost_usd: row.get(5)?,
-                avg_latency_ms: row.get(6)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let stats = stmt
+            .query_map(params![app_type, days], |row| {
+                Ok(ProviderUsage {
+                    provider_id: row.get(0)?,
+                    total_requests: row.get(1)?,
+                    total_success: row.get(2)?,
+                    total_input_tokens: row.get(3)?,
+                    total_output_tokens: row.get(4)?,
+                    total_cost_usd: row.get(5)?,
+                    avg_latency_ms: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(stats)
+    }
+
+    /// Get usage statistics grouped by model
+    pub fn get_usage_by_model(&self, app_type: &str, days: i32) -> anyhow::Result<Vec<ModelUsage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                model,
+                COUNT(*) as total_requests,
+                SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) as total_success,
+                COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0) as total_cost,
+                CAST(COALESCE(AVG(latency_ms), 0) AS INTEGER) as avg_latency
+             FROM proxy_request_logs
+             WHERE app_type = ?1 AND created_at >= strftime('%s', 'now', '-' || ?2 || ' days')
+             GROUP BY model
+             ORDER BY total_requests DESC"
+        )?;
+
+        let stats = stmt
+            .query_map(params![app_type, days], |row| {
+                Ok(ModelUsage {
+                    model: row.get(0)?,
+                    total_requests: row.get(1)?,
+                    total_success: row.get(2)?,
+                    total_input_tokens: row.get(3)?,
+                    total_output_tokens: row.get(4)?,
+                    total_cost_usd: row.get(5)?,
+                    avg_latency_ms: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(stats)
+    }
+
+    /// Get recent request logs
+    pub fn get_recent_request_logs(
+        &self,
+        app_type: &str,
+        limit: i32,
+    ) -> anyhow::Result<Vec<RequestLogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT request_id, provider_id, model, input_tokens, output_tokens,
+                    CAST(total_cost_usd AS REAL), latency_ms, status_code,
+                    error_message, session_id, created_at
+             FROM proxy_request_logs
+             WHERE app_type = ?1
+             ORDER BY created_at DESC
+             LIMIT ?2",
+        )?;
+
+        let logs = stmt
+            .query_map(params![app_type, limit], |row| {
+                Ok(RequestLogEntry {
+                    request_id: row.get(0)?,
+                    provider_id: row.get(1)?,
+                    model: row.get(2)?,
+                    input_tokens: row.get(3)?,
+                    output_tokens: row.get(4)?,
+                    total_cost_usd: row.get(5)?,
+                    latency_ms: row.get(6)?,
+                    status_code: row.get(7)?,
+                    error_message: row.get(8)?,
+                    session_id: row.get(9)?,
+                    created_at: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(logs)
     }
 
     // =========================================================================
@@ -556,30 +653,36 @@ impl Database {
     }
 
     /// Get recent stream check logs
-    pub fn get_stream_check_logs(&self, app_type: &str, limit: i32) -> anyhow::Result<Vec<StreamCheckLog>> {
+    pub fn get_stream_check_logs(
+        &self,
+        app_type: &str,
+        limit: i32,
+    ) -> anyhow::Result<Vec<StreamCheckLog>> {
         let mut stmt = self.conn.prepare(
             "SELECT provider_id, provider_name, app_type, status, success, message,
                     response_time_ms, http_status, model_used, tested_at
              FROM stream_check_logs 
              WHERE app_type = ?1
              ORDER BY tested_at DESC
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
 
-        let logs = stmt.query_map(params![app_type, limit], |row| {
-            Ok(StreamCheckLog {
-                provider_id: row.get(0)?,
-                provider_name: row.get(1)?,
-                app_type: row.get(2)?,
-                status: row.get(3)?,
-                success: row.get::<_, i32>(4)? != 0,
-                message: row.get(5)?,
-                response_time_ms: row.get(6)?,
-                http_status: row.get(7)?,
-                model_used: row.get(8)?,
-                tested_at: row.get(9)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let logs = stmt
+            .query_map(params![app_type, limit], |row| {
+                Ok(StreamCheckLog {
+                    provider_id: row.get(0)?,
+                    provider_name: row.get(1)?,
+                    app_type: row.get(2)?,
+                    status: row.get(3)?,
+                    success: row.get::<_, i32>(4)? != 0,
+                    message: row.get(5)?,
+                    response_time_ms: row.get(6)?,
+                    http_status: row.get(7)?,
+                    model_used: row.get(8)?,
+                    tested_at: row.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(logs)
     }
@@ -593,7 +696,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT proxy_enabled, listen_address, listen_port, enable_logging,
                     auto_failover_enabled, max_retries
-             FROM proxy_config WHERE app_type = ?1"
+             FROM proxy_config WHERE app_type = ?1",
         )?;
 
         let config = stmt.query_row(params![app_type], |row| {
@@ -639,11 +742,11 @@ impl Database {
     /// Import providers from cc-switch database
     pub fn import_from_cc_switch(&self, cc_switch_db_path: &PathBuf) -> anyhow::Result<i32> {
         let src_conn = Connection::open(cc_switch_db_path)?;
-        
+
         let mut stmt = src_conn.prepare(
             "SELECT id, name, settings_config, website_url, category, 
                     in_failover_queue, cost_multiplier, provider_type, notes
-             FROM providers WHERE app_type = 'claude'"
+             FROM providers WHERE app_type = 'claude'",
         )?;
 
         let mut imported = 0;
@@ -738,4 +841,32 @@ pub struct ProviderUsage {
     pub total_output_tokens: i64,
     pub total_cost_usd: f64,
     pub avg_latency_ms: i64,
+}
+
+/// Usage statistics grouped by model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelUsage {
+    pub model: String,
+    pub total_requests: i64,
+    pub total_success: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cost_usd: f64,
+    pub avg_latency_ms: i64,
+}
+
+/// Compact request log for display
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLogEntry {
+    pub request_id: String,
+    pub provider_id: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub total_cost_usd: f64,
+    pub latency_ms: i64,
+    pub status_code: i32,
+    pub error_message: Option<String>,
+    pub session_id: Option<String>,
+    pub created_at: i64,
 }

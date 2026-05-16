@@ -19,15 +19,18 @@ pub enum ProxyError {
     UpstreamError(String),
 
     #[error("Stream processing failed: {0}")]
+    #[allow(dead_code)]
     StreamError(String),
 
     #[error("Configuration error: {0}")]
+    #[allow(dead_code)]
     ConfigError(String),
 
     #[error("Bad request: {0}")]
     BadRequest(String),
 
     #[error("Internal error: {0}")]
+    #[allow(dead_code)]
     Internal(String),
 }
 
@@ -44,16 +47,12 @@ impl IntoResponse for ProxyError {
                 "no_providers",
                 self.to_string(),
             ),
-            ProxyError::TransformError(_) => (
-                StatusCode::BAD_REQUEST,
-                "transform_error",
-                self.to_string(),
-            ),
-            ProxyError::UpstreamError(_) => (
-                StatusCode::BAD_GATEWAY,
-                "upstream_error",
-                self.to_string(),
-            ),
+            ProxyError::TransformError(_) => {
+                (StatusCode::BAD_REQUEST, "transform_error", self.to_string())
+            }
+            ProxyError::UpstreamError(_) => {
+                (StatusCode::BAD_GATEWAY, "upstream_error", self.to_string())
+            }
             ProxyError::StreamError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "stream_error",
@@ -64,11 +63,7 @@ impl IntoResponse for ProxyError {
                 "config_error",
                 self.to_string(),
             ),
-            ProxyError::BadRequest(_) => (
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                self.to_string(),
-            ),
+            ProxyError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request", self.to_string()),
             ProxyError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",

@@ -2,8 +2,8 @@
 //!
 //! Pre-configured provider settings for common AI providers
 
-use serde::{Deserialize, Serialize};
 use crate::config::ApiFormat;
+use serde::{Deserialize, Serialize};
 
 /// Provider preset
 #[derive(Debug, Clone, Serialize, Deserialize)]
